@@ -5,6 +5,7 @@ export abstract class DynamicServerApp<T extends Record<string, any>> {
   abstract port: number;
   abstract schema: ZodObject<any>;
   isServerInstance: boolean = false; // ← new field
+  logToUI: ((message: string) => void) | null = null;
 
   getState(): Partial<T> {
     const state: Partial<T> = {};
@@ -228,6 +229,13 @@ export async function startServer<T extends Record<string, any>>(
           const parsed = JSON.parse(body);
           if (typeof routes[url.pathname] === "function") {
             const result = await routes[url.pathname]!(appInstance, parsed);
+
+            if (typeof result === "string") {
+              appInstance.logToUI?.(result);
+            } else if (result != null) {
+              appInstance.logToUI?.(JSON.stringify(result, null, 2));
+            }
+
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ status: "ok", result }));
           } else {
@@ -241,6 +249,7 @@ export async function startServer<T extends Record<string, any>>(
       });
       return;
     }
+
 
     res.writeHead(404);
     res.end("Not Found");

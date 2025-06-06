@@ -18,6 +18,13 @@ export function AppCli({ app }: AppProps) {
   const [cursorVisible, setCursorVisible] = useState(true);
 
   useEffect(() => {
+    app.logToUI = (msg: string) => setLogMessage(msg);
+    return () => {
+      app.logToUI = null;
+    };
+  }, []);
+
+  useEffect(() => {
     const cursorInterval = setInterval(() => {
       setCursorVisible((v) => !v);
     }, 500);

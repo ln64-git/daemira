@@ -127,7 +127,9 @@ export async function runDynamicApp<T extends Record<string, any>>(appInstance: 
       }).then((r) => r.json()).then((res) => (res as { result: any }).result)
       : await (appInstance as any)[key]();
 
-    console.log(returnOutput ? result : `${result}`);
+    if (result !== undefined) {
+      console.log(returnOutput ? result : `${result}`);
+    }
     process.exit(0);
   }
 
@@ -243,7 +245,7 @@ export async function startServer<T extends Record<string, any>>(
     res.writeHead(404);
     res.end("Not Found");
   });
-  
+
   appInstance.isServerInstance = true;
   server.listen(port);
 }

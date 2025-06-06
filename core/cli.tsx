@@ -177,28 +177,38 @@ export function AppCli({ app }: AppProps) {
         {isSynced && !app.isServerInstance && <Text color="red"> (Remote)</Text>}
       </Text>
 
-      <Text bold>Variables:</Text>
-      <Box flexDirection="column" paddingLeft={2}>
-        {Object.entries(state)
-          .filter(([key]) => key !== "port" && key !== "isServerInstance")
-          .map(([key, val]) => (
-            <Text key={key}>
-              <Text color="gray">{key.padEnd(12)}</Text>
-              <Text color={val === "…" ? "gray" : "white"} italic={val === "…"}>
-                {String(val)}
-              </Text>
-            </Text>
-          ))}
-      </Box>
+      {/* Conditionally show Variables */}
+      {Object.keys(state).some((key) => key !== "port" && key !== "isServerInstance") && (
+        <>
+          <Text bold>Variables:</Text>
+          <Box flexDirection="column" paddingLeft={2}>
+            {Object.entries(state)
+              .filter(([key]) => key !== "port" && key !== "isServerInstance")
+              .map(([key, val]) => (
+                <Text key={key}>
+                  <Text color="gray">{key.padEnd(12)}</Text>
+                  <Text color={val === "…" ? "gray" : "white"} italic={val === "…"}>
+                    {String(val)}
+                  </Text>
+                </Text>
+              ))}
+          </Box>
+        </>
+      )}
 
-      <Text bold>Functions:</Text>
-      <Box flexDirection="column" paddingLeft={2}>
-        {functionNames.map((fn) => (
-          <Text key={fn}>
-            <Text color="blue">{fn}()</Text>
-          </Text>
-        ))}
-      </Box>
+      {/* Conditionally show Functions */}
+      {functionNames.length > 0 && (
+        <>
+          <Text bold>Functions:</Text>
+          <Box flexDirection="column" paddingLeft={2}>
+            {functionNames.map((fn) => (
+              <Text key={fn}>
+                <Text color="blue">{fn}()</Text>
+              </Text>
+            ))}
+          </Box>
+        </>
+      )}
 
       <Box paddingTop={1}>
         <Text color="white"> {logMessage}</Text>
@@ -219,4 +229,5 @@ export function AppCli({ app }: AppProps) {
       </Box>
     </Box>
   );
+
 }

@@ -11,7 +11,7 @@ export class Daemira extends DynamicServerApp<DaemiraState> {
   schema = DaemiraSchema;
   port = 2005;
 
-  async updateSystem(): Promise<void> {
+  async updateSystem(): Promise<string> {
     const steps = [
       { name: "Updating package databases", cmd: "sudo pacman -Sy" },
       { name: "Upgrading packages", cmd: "sudo pacman -Su --noconfirm" },
@@ -24,6 +24,7 @@ export class Daemira extends DynamicServerApp<DaemiraState> {
       });
       console.log(`🔹 Done: ${step.name}\n`);
     }
+    return "update completed";
   }
 
 }

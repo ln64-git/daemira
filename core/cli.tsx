@@ -96,7 +96,7 @@ export function AppCli({ app }: AppProps) {
           : await (app as any)[fn]();
         const output = isRunning ? result.result : result;
         await refresh();
-        setLogMessage(`${JSON.stringify(output)}`);
+        setLogMessage(typeof output === "string" ? output : JSON.stringify(output, null, 2));
       } catch (e: any) {
         setLogMessage(`Error: ${e.message}`);
       }

@@ -11,25 +11,47 @@ export class Daemira extends DynamicServerApp<DaemiraState> {
   schema = DaemiraSchema;
   port = 2005;
 
-  async updateSystem(): Promise<string> {
-    const steps = [
-      { name: "Updating package databases", cmd: "sudo pacman -Sy" },
-      { name: "Upgrading packages", cmd: "sudo pacman -Su --noconfirm" },
-      { name: "Cleaning up", cmd: "sudo paccache -r" },
-    ];
-    for (const step of steps) {
-      console.log(`🔹 ${step.name}...`);
-      await runCommand(step.cmd, (line) => {
-        console.log(line);
-      });
-      console.log(`🔹 Done: ${step.name}\n`);
-    }
-    return "update completed";
+  async keepSystemUpdated(): Promise<string> {
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    let hasUpdatedToday = false;
+    const startMsg = "System update scheduler started.";
+    (async () => {
+      while (true) {
+        const now = new Date();
+        const hour = now.getHours();
+        const minute = now.getMinutes();
+        if (hour === 7 && minute === 0 && !hasUpdatedToday) {
+          await updateSystem();
+          hasUpdatedToday = true;
+        }
+        if (hour === 8 && hasUpdatedToday) {
+          hasUpdatedToday = false;
+        }
+        await sleep(1000 * 60);
+      }
+    })();
+    return startMsg;
   }
 
 }
 
-export async function runCommand(cmd: string, onData: (line: string) => void): Promise<number> {
+async function updateSystem(): Promise<string> {
+  const steps = [
+    { name: "Updating package databases", cmd: "sudo pacman -Sy" },
+    { name: "Upgrading packages", cmd: "sudo pacman -Su --noconfirm" },
+    { name: "Cleaning up", cmd: "sudo paccache -r" },
+  ];
+  for (const step of steps) {
+    console.log(`🔹 ${step.name}...`);
+    await runCommand(step.cmd, (line) => {
+      console.log(line);
+    });
+    console.log(`🔹 Done: ${step.name}\n`);
+  }
+  return "update completed";
+}
+
+async function runCommand(cmd: string, onData: (line: string) => void): Promise<number> {
   return new Promise((resolve, reject) => {
     const parts = cmd.split(" ");
     if (!parts[0]) {
@@ -42,7 +64,6 @@ export async function runCommand(cmd: string, onData: (line: string) => void): P
         if (line.trim()) onData(line);
       });
     };
-
     proc.stdout.on("data", handle);
     proc.stderr.on("data", handle);
     proc.on("error", reject);

@@ -120,19 +120,37 @@ export async function runDynamicApp<T extends Record<string, any>>(appInstance: 
   }
 
   if (command === "call" && key) {
-    const result = isRunning
-      ? await fetch(`http://localhost:${appInstance.port}/${key}`, {
+    if (isRunning) {
+      const result = await fetch(`http://localhost:${appInstance.port}/${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([]),
-      }).then((r) => r.json()).then((res) => (res as { result: any }).result)
-      : await (appInstance as any)[key]();
+      }).then((r) => r.json()).then((res) => (res as { result: any }).result);
 
-    if (result !== undefined) {
-      console.log(returnOutput ? result : `${result}`);
+      if (result !== undefined && returnOutput) {
+        console.log(result);
+      }
+      process.exit(0);
     }
-    process.exit(0);
+    // Otherwise: defer execution until server starts and UI is ready
+    return startServer(appInstance, {
+      port: appInstance.port,
+      routes: buildRoutes(appInstance),
+    }).then(() => {
+      setTimeout(async () => {
+        const result = await (appInstance as any)[key]();
+        if (result !== undefined) {
+          appInstance.logToUI?.(
+            typeof result === "string" ? result : JSON.stringify(result, null, 2)
+          );
+          if (returnOutput) {
+            console.log(result);
+          }
+        }
+      }, 200);
+    });
   }
+
 
   return startServer(appInstance, { port: appInstance.port, routes: buildRoutes(appInstance) });
 }

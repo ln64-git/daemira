@@ -1,5 +1,7 @@
 import { ZodObject } from "zod";
 import { isEqual } from "lodash"; // or write your own deepCompare
+import { exec } from "child_process";
+import net from "net";
 
 export abstract class DynamicServerApp<T extends Record<string, any>> {
   abstract port: number;
@@ -96,7 +98,7 @@ export abstract class DynamicServerApp<T extends Record<string, any>> {
 
 export async function runDynamicApp<T extends Record<string, any>>(appInstance: DynamicServerApp<T>): Promise<void> {
   const defaults = appInstance.getState() as T;
-  const { command, key, value, returnOutput } = cliToState(defaults);
+  const { command, key, value, returnOutput, notify } = cliToState(defaults);
   const isRunning = await appInstance.probe();
 
   if (command === "get" && key) {
@@ -125,14 +127,17 @@ export async function runDynamicApp<T extends Record<string, any>>(appInstance: 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([]),
-      }).then((r) => r.json()).then((res) => (res as { result: any }).result);
+      }).then((r) => r.json())
+        .then((res) => (res as { result: any }).result);
 
-      if (result !== undefined && returnOutput) {
-        console.log(result);
+      if (result !== undefined) {
+        if (returnOutput) console.log(result);
+        if (notify) sendNotification(`✅ ${key} finished`, String(result));
       }
+
       process.exit(0);
     }
-    // Otherwise: defer execution until server starts and UI is ready
+
     return startServer(appInstance, {
       port: appInstance.port,
       routes: buildRoutes(appInstance),
@@ -143,9 +148,8 @@ export async function runDynamicApp<T extends Record<string, any>>(appInstance: 
           appInstance.logToUI?.(
             typeof result === "string" ? result : JSON.stringify(result, null, 2)
           );
-          if (returnOutput) {
-            console.log(result);
-          }
+          if (returnOutput) console.log(result);
+          if (notify) sendNotification(`✅ ${key} finished`, String(result));
         }
       }, 200);
     });
@@ -284,10 +288,12 @@ export function cliToState<T extends Record<string, any>>(defaults: T): {
   key?: string;
   value?: string;
   returnOutput: boolean;
+  notify: boolean;
 } {
   const args = process.argv.slice(2);
   let command: "get" | "set" | "call" | null = null;
   let returnOutput = false;
+  let notify = false;
   let key: string | undefined;
   let value: string | undefined;
 
@@ -298,15 +304,18 @@ export function cliToState<T extends Record<string, any>>(defaults: T): {
       command = arg;
       key = args[i + 1];
       value = args[i + 2];
-      break;
     }
 
     if (arg === "--return") {
       returnOutput = true;
     }
+
+    if (arg === "--notify") {
+      notify = true;
+    }
   }
 
-  return { command, key, value, returnOutput };
+  return { command, key, value, returnOutput, notify };
 }
 
 
@@ -323,7 +332,10 @@ export function diffStatePatch<T extends Record<string, any>>(cliArgs: T, curren
 }
 
 
-import net from "net";
+export function sendNotification(title: string, body: string) {
+  exec(`notify-send "${title}" "${body.replace(/"/g, '\\"')}"`);
+}
+
 
 async function findAvailablePort(start: number, maxAttempts = 50): Promise<number> {
   let port = start;

@@ -15,9 +15,6 @@ export class Daemira extends DynamicServerApp<DaemiraState> {
   async keepSystemUpdated(): Promise<string> {
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
     let hasUpdatedToday = false;
-
-    this.setSystemMessage("System update scheduler started.");
-
     (async () => {
       while (true) {
         const now = new Date();
@@ -33,7 +30,6 @@ export class Daemira extends DynamicServerApp<DaemiraState> {
         await sleep(60_000);
       }
     })();
-
     return "System update scheduler started.";
   }
 

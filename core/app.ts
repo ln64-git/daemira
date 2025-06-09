@@ -92,8 +92,12 @@ export abstract class DynamicServerApp<T extends Record<string, any>> {
   }
 }
 
-export async function runDynamicApp<T extends Record<string, any>>(app: DynamicServerApp<T>): Promise<void> {
-  const { command, key, value, returnOutput, notify } = cliToState(app.getState() as T);
+export async function runDynamicApp<T extends Record<string, any>>(
+  app: DynamicServerApp<T>
+): Promise<void> {
+  const { command, key, value, returnOutput, notify } = cliToState(
+    app.getState() as T
+  );
   (app as any).notifyEnabled = notify;
 
   const handleResult = (res: any) => {
@@ -104,41 +108,52 @@ export async function runDynamicApp<T extends Record<string, any>>(app: DynamicS
     }
   };
 
+  // ── get ────────────────────────────────────────────────────────────────
   if (command === "get" && key) {
     const isRunning = await app.probe();
-    const state = isRunning ? await fetch(`http://localhost:${app.port}/state`).then(r => r.json()) : app.getState();
-    const typedState = state as T;
-    handleResult(typedState[key as keyof T]);
+    const state = isRunning
+      ? await fetch(`http://localhost:${app.port}/state`).then(r => r.json())
+      : app.getState();
+    handleResult((state as T)[key as keyof T]);
     process.exit(0);
   }
 
+  // ── set ────────────────────────────────────────────────────────────────
   if (command === "set" && key && value !== undefined) {
     const newState = await app.set({ [key]: value } as Partial<T>);
     handleResult(newState?.[key as keyof T]);
     process.exit(0);
   }
 
+  // ── call ───────────────────────────────────────────────────────────────
   if (command === "call" && key) {
     const isRunning = await app.probe();
+
+    // Remote instance exists → proxy the call and exit
     if (isRunning) {
       const res = await fetch(`http://localhost:${app.port}/${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([]),
       }).then(r => r.json());
-      handleResult((res as { result?: any })?.result);
+      handleResult((res as { result?: any }).result);
       process.exit(0);
     }
-    startServer(app, { port: app.port, routes: buildRoutes(app) }).then(() => setTimeout(async () => {
+
+    // No server yet → start one, THEN invoke the method locally, THEN return
+    return startServer(app, {
+      port: app.port,
+      routes: buildRoutes(app),
+    }).then(async () => {
       const res = await (app as any)[key]();
-      if (res !== undefined) {
-        handleResult(res);
-      }
-    }, 200));
+      handleResult(res);
+    });
   }
 
+  // ── default: just start the server ─────────────────────────────────────
   return startServer(app, { port: app.port, routes: buildRoutes(app) });
 }
+
 
 function buildRoutes<T extends Record<string, any>>(app: DynamicServerApp<T>): Record<string, RemoteAction<T>> {
   return Object.getOwnPropertyNames(Object.getPrototypeOf(app))

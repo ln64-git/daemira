@@ -2,7 +2,7 @@
 import { render } from "ink";
 import { Daemira } from "../src/Daemira";
 import { cliToState, runDynamicApp } from "@core/app";
-import { AppCli } from "@core/cli";
+import { AppCli } from "./cli";
 
 const instance = new Daemira();
 const { returnOutput } = cliToState(instance.getState());

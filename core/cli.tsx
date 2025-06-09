@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import type { DynamicServerApp } from "./app";
 
@@ -9,20 +9,13 @@ export interface AppProps {
 
 export function AppCli({ app }: AppProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [state, setState] = useState<Record<string, any>>({});
   const [inputValue, setInputValue] = useState("");
-  const [logMessage, setLogMessage] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [isSynced, setIsSynced] = useState<boolean>(false);
   const [cursorVisible, setCursorVisible] = useState(true);
-
-  useEffect(() => {
-    app.logToUI = (msg: string) => setLogMessage(msg);
-    return () => {
-      app.logToUI = null;
-    };
-  }, []);
 
   useEffect(() => {
     const cursorInterval = setInterval(() => {
@@ -71,14 +64,14 @@ export function AppCli({ app }: AppProps) {
 
     if (cmd === "get") {
       const key = args[0];
-      if (!key) return setLogMessage("Please specify a key.");
-      if (key === "port") return setLogMessage(`Access to 'port' is restricted.`);
-      setLogMessage(`${state[key as keyof typeof state] ?? ""}`);
+      if (!key) return app.setSystemMessage("Please specify a key.");
+      if (key === "port") return app.setSystemMessage(`Access to 'port' is restricted.`);
+      app.setSystemMessage(`${state[key as keyof typeof state] ?? ""}`);
     }
 
     else if (cmd === "set") {
       const key = String(args[0]);
-      if (key === "port") return setLogMessage(`'port' cannot be modified.`);
+      if (key === "port") return app.setSystemMessage(`'port' cannot be modified.`);
       const value = args.slice(1).join(" ");
       const updatedState = await app.set({ [key]: value });
       if (updatedState) {
@@ -86,12 +79,12 @@ export function AppCli({ app }: AppProps) {
       } else {
         await refresh();
       }
-      setLogMessage(`set ${key}: ${value}`);
+      app.setSystemMessage(`set ${key}: ${value}`);
     }
 
     else if (cmd === "call" || cmd?.endsWith("()")) {
       const fn = cmd === "call" ? args[0] : cmd.slice(0, -2);
-      if (!fn) return setLogMessage("Please specify a function to call.");
+      if (!fn) return app.setSystemMessage("Please specify a function to call.");
       try {
         const isRunning = await app.probe();
         const result = isRunning
@@ -103,14 +96,14 @@ export function AppCli({ app }: AppProps) {
           : await (app as any)[fn]();
         const output = isRunning ? result.result : result;
         await refresh();
-        setLogMessage(typeof output === "string" ? output : JSON.stringify(output, null, 2));
+        app.setSystemMessage(typeof output === "string" ? output : JSON.stringify(output, null, 2));
       } catch (e: any) {
-        setLogMessage(`Error: ${e.message}`);
+        app.setSystemMessage(`Error: ${e.message}`);
       }
     }
 
     else {
-      setLogMessage(`Unknown command: ${command}`);
+      app.setSystemMessage(`Unknown command: ${command}`);
     }
 
     setHistory((prev) => [...prev, command]);
@@ -178,13 +171,18 @@ export function AppCli({ app }: AppProps) {
 
   return (
     <Box flexDirection="column" paddingLeft={2}>
+      <Box flexDirection="column-reverse">
+        {app.systemLog.slice(-10).reverse().map((msg, idx) => (
+          <Text key={idx} color="gray">{msg}</Text>
+        ))}
+      </Box>
+
       <Text>
         <Text color="cyan" bold>{className}</Text>
         <Text color="gray"> (port {app.port})</Text>
         {isSynced && !app.isServerInstance && <Text color="red"> (Remote)</Text>}
       </Text>
 
-      {/* Conditionally show Variables */}
       {Object.keys(state).some((key) => key !== "port" && key !== "isServerInstance") && (
         <>
           <Text bold>Variables:</Text>
@@ -203,7 +201,6 @@ export function AppCli({ app }: AppProps) {
         </>
       )}
 
-      {/* Conditionally show Functions */}
       {functionNames.length > 0 && (
         <>
           <Text bold>Functions:</Text>
@@ -218,7 +215,7 @@ export function AppCli({ app }: AppProps) {
       )}
 
       <Box paddingTop={1}>
-        <Text color="white"> {logMessage}</Text>
+        <Text color="white"> {app.systemMessage}</Text>
       </Box>
 
       <Box>
@@ -236,5 +233,4 @@ export function AppCli({ app }: AppProps) {
       </Box>
     </Box>
   );
-
 }

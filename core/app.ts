@@ -1,65 +1,69 @@
 import { ZodObject } from "zod";
-import { isEqual } from "lodash"; // or write your own deepCompare
+import { isEqual } from "lodash";
 import { exec } from "child_process";
 import net from "net";
+import http from "http";
 
 export abstract class DynamicServerApp<T extends Record<string, any>> {
   abstract port: number;
   abstract schema: ZodObject<any>;
-  isServerInstance: boolean = false; // ← new field
-  logToUI: ((message: string) => void) | null = null;
+  isServerInstance = false;
+  systemMessage: string | null = null;
+  systemLog: string[] = [];
+
+  setSystemMessage(msg: string) {
+    this.systemMessage = msg;
+    this.systemLog.push(msg);
+    if (this.systemLog.length > 100) this.systemLog.shift();
+    if ((this as any).notifyEnabled && msg.includes("✅")) {
+      sendNotification("System Update", msg);
+    }
+  }
+
 
   getState(): Partial<T> {
     const state: Partial<T> = {};
+    const exclude = new Set([
+      "schema",
+      "logToUI",
+      "notifyEnabled",
+      "isServerInstance",
+      "systemMessage",
+      "systemLog"
+    ]);
 
-    // own enumerable properties
     for (const key of Object.keys(this)) {
-      if (key !== "schema" && typeof (this as any)[key] !== "function") {
+      if (!exclude.has(key) && typeof (this as any)[key] !== "function") {
         state[key as keyof T] = (this as any)[key];
       }
     }
 
-    // include getter properties from the prototype chain
     let proto = Object.getPrototypeOf(this);
     while (proto && proto !== Object.prototype) {
       for (const key of Object.getOwnPropertyNames(proto)) {
-        if (key === "constructor" || key in state) continue;
+        if (key === "constructor" || key in state || exclude.has(key)) continue;
         const desc = Object.getOwnPropertyDescriptor(proto, key);
-        if (desc && typeof desc.get === "function") {
-          state[key as keyof T] = (this as any)[key];
-        }
+        if (desc?.get) state[key as keyof T] = (this as any)[key];
       }
       proto = Object.getPrototypeOf(proto);
     }
-
     return state;
   }
 
   applyStateUpdate(data: Partial<T>): void {
     const validated = this.schema.partial().parse(data);
     Object.entries(validated).forEach(([key, value]) => {
-      if (key in this) {
+      if (Object.prototype.hasOwnProperty.call(this, key) || !(key in this)) {
         (this as any)[key] = value;
       }
     });
-  }
-
-  getMetadata(): Record<string, string> {
-    return Object.getOwnPropertyNames(this).reduce((meta, key) => {
-      const val = (this as any)[key];
-      if (typeof val !== "function") meta[key] = typeof val;
-      return meta;
-    }, {} as Record<string, string>);
   }
 
   async probe(timeout = 1000): Promise<boolean> {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeout);
-
-      const res = await fetch(`http://localhost:${this.port}/state`, {
-        signal: controller.signal,
-      });
+      const res = await fetch(`http://localhost:${this.port}/state`, { signal: controller.signal });
       clearTimeout(id);
       return res.ok;
     } catch {
@@ -68,132 +72,92 @@ export abstract class DynamicServerApp<T extends Record<string, any>> {
   }
 
   async set(diff: Partial<T>): Promise<Partial<T> | undefined> {
-    const isLocalServer = await this.probe() === false;
-
-    if (isLocalServer) {
+    const isLocal = !(await this.probe());
+    if (isLocal) {
       this.applyStateUpdate(diff);
-      return this.getState(); // immediate result
+      return this.getState();
     }
-
     try {
       const res = await fetch(`http://localhost:${this.port}/state`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(diff),
       });
-
-      const response = await res.json();
-      if (response && typeof response === "object" && "state" in response) {
-        return (response as { state: Partial<T> }).state;
-      }
+      const response = await res.json() as { state?: Partial<T> };
+      return response?.state;
     } catch (e) {
       console.error("❌ Failed to set state:", e);
     }
-
     return undefined;
   }
-
-
 }
 
-export async function runDynamicApp<T extends Record<string, any>>(appInstance: DynamicServerApp<T>): Promise<void> {
-  const defaults = appInstance.getState() as T;
-  const { command, key, value, returnOutput, notify } = cliToState(defaults);
-  const isRunning = await appInstance.probe();
+export async function runDynamicApp<T extends Record<string, any>>(app: DynamicServerApp<T>): Promise<void> {
+  const { command, key, value, returnOutput, notify } = cliToState(app.getState() as T);
+  (app as any).notifyEnabled = notify;
+
+  const handleResult = (res: any) => {
+    if (res !== undefined) {
+      if (returnOutput) console.log(res);
+      if (notify) sendNotification("✅ App Finished", `Port ${app.port}`);
+      if (typeof res === "string") app.setSystemMessage(res);
+    }
+  };
 
   if (command === "get" && key) {
-    const current: Partial<T> = isRunning
-      ? await fetch(`http://localhost:${appInstance.port}/state`).then((r) => r.json() as Promise<Partial<T>>)
-      : appInstance.getState();
-
-    const output = current[key as keyof T];
-    console.log(returnOutput ? output : `${output}`);
+    const isRunning = await app.probe();
+    const state = isRunning ? await fetch(`http://localhost:${app.port}/state`).then(r => r.json()) : app.getState();
+    const typedState = state as T;
+    handleResult(typedState[key as keyof T]);
     process.exit(0);
   }
 
   if (command === "set" && key && value !== undefined) {
-    const update = { [key]: value } as Partial<T>;
-    await appInstance.set(update);
-    if (returnOutput) {
-      const current = appInstance.getState();
-      console.log(current[key as keyof T]);
-    }
+    const newState = await app.set({ [key]: value } as Partial<T>);
+    handleResult(newState?.[key as keyof T]);
     process.exit(0);
   }
 
   if (command === "call" && key) {
+    const isRunning = await app.probe();
     if (isRunning) {
-      const result = await fetch(`http://localhost:${appInstance.port}/${key}`, {
+      const res = await fetch(`http://localhost:${app.port}/${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([]),
-      }).then((r) => r.json())
-        .then((res) => (res as { result: any }).result);
-
-      if (result !== undefined) {
-        if (returnOutput) console.log(result);
-        if (notify) sendNotification(`✅ ${key} finished`, String(result));
-      }
-
+      }).then(r => r.json());
+      handleResult((res as { result?: any })?.result);
       process.exit(0);
     }
-
-    return startServer(appInstance, {
-      port: appInstance.port,
-      routes: buildRoutes(appInstance),
-    }).then(() => {
-      setTimeout(async () => {
-        const result = await (appInstance as any)[key]();
-        if (result !== undefined) {
-          appInstance.logToUI?.(
-            typeof result === "string" ? result : JSON.stringify(result, null, 2)
-          );
-          if (returnOutput) console.log(result);
-          if (notify) sendNotification(`✅ ${key} finished`, String(result));
-        }
-      }, 200);
-    });
+    startServer(app, { port: app.port, routes: buildRoutes(app) }).then(() => setTimeout(async () => {
+      const res = await (app as any)[key]();
+      if (res !== undefined) {
+        handleResult(res);
+      }
+    }, 200));
   }
 
-
-  return startServer(appInstance, { port: appInstance.port, routes: buildRoutes(appInstance) });
+  return startServer(app, { port: app.port, routes: buildRoutes(app) });
 }
 
-
-function buildRoutes<T extends Record<string, any>>(
-  appInstance: DynamicServerApp<T>
-): Record<string, RemoteAction<T>> {
-  return Object.getOwnPropertyNames(Object.getPrototypeOf(appInstance))
-    .filter(key => key !== "constructor" && typeof (appInstance as any)[key] === "function")
-    .reduce((acc, key) => {
-      acc[`/${key}`] = async (app, args) => {
-        const actualArgs = Array.isArray(args) ? args : [];
-        return await (app as any)[key](...actualArgs);
-      };
-      return acc;
+function buildRoutes<T extends Record<string, any>>(app: DynamicServerApp<T>): Record<string, RemoteAction<T>> {
+  return Object.getOwnPropertyNames(Object.getPrototypeOf(app))
+    .filter(k => k !== "constructor" && typeof (app as any)[k] === "function")
+    .reduce((routes, key) => {
+      routes[`/${key}`] = async (app, args) => await (app as any)[key](...(Array.isArray(args) ? args : []));
+      return routes;
     }, {} as Record<string, RemoteAction<T>>);
 }
 
-export type RemoteAction<T extends Record<string, any>> = (
-  appInstance: DynamicServerApp<T>,
-  args?: any
-) => Promise<any>;
-
-import http from "http";
+export type RemoteAction<T extends Record<string, any>> = (app: DynamicServerApp<T>, args?: any) => Promise<any>;
 
 export async function startServer<T extends Record<string, any>>(
-  appInstance: DynamicServerApp<T>,
-  options: {
-    port?: number;
-    routes?: Record<string, RemoteAction<T>>;
-  } = {}
+  app: DynamicServerApp<T>,
+  options: { port?: number; routes?: Record<string, RemoteAction<T>> } = {}
 ) {
-  let port = options.port ?? 2001;
+  let port = await findAvailablePort(options.port ?? 2001);
+  app.port = port;
   const routes = options.routes ?? {};
-
-  // 🔍 Ensure port is free or find a new one
-  port = await findAvailablePort(port);
-  appInstance.port = port;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
@@ -202,44 +166,30 @@ export async function startServer<T extends Record<string, any>>(
     if (url.pathname === "/state") {
       if (method === "GET") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(appInstance.getState()));
-        return;
-      }
-
-      if (method === "POST") {
+        res.end(JSON.stringify(app.getState()));
+      } else if (method === "POST") {
         let body = "";
         req.on("data", chunk => (body += chunk));
         req.on("end", () => {
           try {
-            if (!body) throw new Error("Empty request body");
-
             const parsed = JSON.parse(body);
-            const before = appInstance.getState();
             const patch: Partial<T> = {};
-
+            const current = app.getState();
             for (const key in parsed) {
-              if (!isEqual(parsed[key], before[key])) {
-                (patch as any)[key] = parsed[key];
-              }
+              if (!isEqual(parsed[key], current[key])) (patch as any)[key] = parsed[key];
             }
-
-            if (Object.keys(patch).length > 0) {
-              appInstance.applyStateUpdate(patch);
-            }
-
-            const newState = appInstance.getState();
+            if (Object.keys(patch).length) app.applyStateUpdate(patch);
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "ok", state: newState }));
+            res.end(JSON.stringify({ status: "ok", state: app.getState() }));
           } catch (err: any) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err.message || "Invalid JSON" }));
           }
         });
-        return;
+      } else {
+        res.writeHead(405);
+        res.end("Method Not Allowed");
       }
-
-      res.writeHead(405);
-      res.end("Method Not Allowed");
       return;
     }
 
@@ -249,21 +199,9 @@ export async function startServer<T extends Record<string, any>>(
       req.on("end", async () => {
         try {
           const parsed = JSON.parse(body);
-          if (typeof routes[url.pathname] === "function") {
-            const result = await routes[url.pathname]!(appInstance, parsed);
-
-            if (typeof result === "string") {
-              appInstance.logToUI?.(result);
-            } else if (result != null) {
-              appInstance.logToUI?.(JSON.stringify(result, null, 2));
-            }
-
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "ok", result }));
-          } else {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Route not found" }));
-          }
+          const result = await routes[url.pathname]!(app, parsed);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok", result }));
         } catch (err: any) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err.message }));
@@ -272,17 +210,16 @@ export async function startServer<T extends Record<string, any>>(
       return;
     }
 
-
     res.writeHead(404);
     res.end("Not Found");
   });
 
-  appInstance.isServerInstance = true;
-  server.listen(port);
+  app.isServerInstance = true;
+  server.listen(port, () => {
+    if ((app as any).notifyEnabled) sendNotification("🟢 Server Started", `Listening on port ${port}`);
+  });
 }
 
-
-// src/core/CLI.ts
 export function cliToState<T extends Record<string, any>>(defaults: T): {
   command: "get" | "set" | "call" | null;
   key?: string;
@@ -296,62 +233,36 @@ export function cliToState<T extends Record<string, any>>(defaults: T): {
   let notify = false;
   let key: string | undefined;
   let value: string | undefined;
-
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-
-    if (arg === "get" || arg === "set" || arg === "call") {
-      command = arg;
+    if (typeof arg === "string" && ["get", "set", "call"].includes(arg)) {
+      command = arg as any;
       key = args[i + 1];
       value = args[i + 2];
     }
-
-    if (arg === "--return") {
-      returnOutput = true;
-    }
-
-    if (arg === "--notify") {
-      notify = true;
-    }
+    if (arg === "--return") returnOutput = true;
+    if (arg === "--notify") notify = true;
   }
-
   return { command, key, value, returnOutput, notify };
 }
 
-
-
-
-export function diffStatePatch<T extends Record<string, any>>(cliArgs: T, currentState: Partial<T>): Partial<T> {
-  const patch: Partial<T> = {};
-  for (const key in cliArgs) {
-    if (cliArgs[key] !== undefined && cliArgs[key] !== currentState[key]) {
-      patch[key] = cliArgs[key];
-    }
-  }
-  return patch;
+export function diffStatePatch<T extends Record<string, any>>(cliArgs: T, current: Partial<T>): Partial<T> {
+  return Object.fromEntries(Object.entries(cliArgs).filter(([k, v]) => v !== undefined && v !== current[k])) as Partial<T>;
 }
-
 
 export function sendNotification(title: string, body: string) {
   exec(`notify-send "${title}" "${body.replace(/"/g, '\\"')}"`);
 }
 
-
 async function findAvailablePort(start: number, maxAttempts = 50): Promise<number> {
-  let port = start;
-  for (let i = 0; i < maxAttempts; i++) {
-    const isFree = await new Promise<boolean>((resolve) => {
-      const tester = net.createServer()
+  for (let port = start, i = 0; i < maxAttempts; i++, port++) {
+    const isFree = await new Promise<boolean>(resolve => {
+      const server = net.createServer()
         .once("error", () => resolve(false))
-        .once("listening", function () {
-          tester.close();
-          resolve(true);
-        })
+        .once("listening", () => server.close(() => resolve(true)))
         .listen(port);
     });
-
     if (isFree) return port;
-    port++;
   }
   throw new Error(`No available ports found starting from ${start}`);
 }

@@ -1,283 +1,337 @@
-import { ZodObject } from "zod";
 import { isEqual } from "lodash";
-import { exec } from "child_process";
 import net from "net";
-import http from "http";
 
-export abstract class DynamicServerApp<T extends Record<string, any>> {
-  abstract port: number;
-  abstract schema: ZodObject<any>;
-  isServerInstance = false;
-  systemMessage: string | null = null;
-  systemLog: string[] = [];
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════
 
-  setSystemMessage(msg: string) {
-    this.systemMessage = msg;
-    this.systemLog.push(msg);
-    if (this.systemLog.length > 100) this.systemLog.shift();
-    if ((this as any).notifyEnabled && msg.includes("✅")) {
-      sendNotification("System Update", msg);
-    }
+type JSONValue = string | number | boolean | null | JSONValue[] | { [key: string]: JSONValue };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// APP BASE CLASS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export abstract class App {
+  port = 2000;
+
+  // Serialize instance to JSON (exclude methods)
+  toJSON(): Record<string, JSONValue> {
+    return Object.fromEntries(
+      Object.entries(this).filter(([_, v]) => typeof v !== 'function')
+    ) as Record<string, JSONValue>;
   }
 
-
-  getState(): Partial<T> {
-    const state: Partial<T> = {};
-    const exclude = new Set([
-      "schema",
-      "logToUI",
-      "notifyEnabled",
-      "isServerInstance",
-      "systemMessage",
-      "systemLog"
-    ]);
-
-    for (const key of Object.keys(this)) {
-      if (!exclude.has(key) && typeof (this as any)[key] !== "function") {
-        state[key as keyof T] = (this as any)[key];
-      }
-    }
-
-    let proto = Object.getPrototypeOf(this);
-    while (proto && proto !== Object.prototype) {
-      for (const key of Object.getOwnPropertyNames(proto)) {
-        if (key === "constructor" || key in state || exclude.has(key)) continue;
-        const desc = Object.getOwnPropertyDescriptor(proto, key);
-        if (desc?.get) state[key as keyof T] = (this as any)[key];
-      }
-      proto = Object.getPrototypeOf(proto);
-    }
-    return state;
-  }
-
-  applyStateUpdate(data: Partial<T>): void {
-    const validated = this.schema.partial().parse(data);
-    Object.entries(validated).forEach(([key, value]) => {
-      if (Object.prototype.hasOwnProperty.call(this, key) || !(key in this)) {
-        (this as any)[key] = value;
-      }
+  // Deserialize JSON into instance
+  fromJSON(data: Record<string, JSONValue>): void {
+    Object.entries(data).forEach(([key, value]) => {
+      (this as any)[key] = value;
     });
   }
 
-  async probe(timeout = 1000): Promise<boolean> {
+  // Save state to file
+  async save(): Promise<void> {
     try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeout);
-      const res = await fetch(`http://localhost:${this.port}/state`, { signal: controller.signal });
-      clearTimeout(id);
+      await Bun.write('.app-state.json', JSON.stringify(this.toJSON(), null, 2));
+    } catch (error) {
+      console.error('Failed to save state:', error);
+    }
+  }
+
+  // Load state from file
+  async load(): Promise<void> {
+    try {
+      const data = await Bun.file('.app-state.json').text();
+      this.fromJSON(JSON.parse(data));
+    } catch (error) {
+      // File doesn't exist yet - that's fine
+    }
+  }
+
+  // Check if server is running on port
+  async probe(): Promise<boolean> {
+    try {
+      const res = await fetch(`http://localhost:${this.port}/health`);
       return res.ok;
     } catch {
       return false;
     }
   }
 
-  async set(diff: Partial<T>): Promise<Partial<T> | undefined> {
+  // Set state (local or remote)
+  async setState(updates: Record<string, JSONValue>): Promise<Record<string, JSONValue> | undefined> {
     const isLocal = !(await this.probe());
+
     if (isLocal) {
-      this.applyStateUpdate(diff);
-      return this.getState();
+      this.fromJSON(updates);
+      await this.save();
+      return this.toJSON();
     }
+
     try {
       const res = await fetch(`http://localhost:${this.port}/state`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(diff),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
       });
-      const response = await res.json() as { state?: Partial<T> };
+      const response = await res.json() as { state?: Record<string, JSONValue> };
       return response?.state;
-    } catch (e) {
-      console.error("❌ Failed to set state:", e);
+    } catch (error) {
+      console.error('Failed to set state:', error);
+      return undefined;
     }
-    return undefined;
   }
 }
 
-export async function runDynamicApp<T extends Record<string, any>>(
-  app: DynamicServerApp<T>
-): Promise<void> {
-  const { command, key, value, returnOutput, notify } = cliToState(
-    app.getState() as T
-  );
-  (app as any).notifyEnabled = notify;
+// ═══════════════════════════════════════════════════════════════════════════
+// PROXY WRAPPER (AUTO-SAVE)
+// ═══════════════════════════════════════════════════════════════════════════
 
-  const handleResult = (res: any) => {
-    if (res !== undefined) {
-      if (returnOutput) console.log(res);
-      if (notify) sendNotification("✅ App Finished", `Port ${app.port}`);
-      if (typeof res === "string") app.setSystemMessage(res);
+function createStatefulProxy<T extends App>(instance: T, dev: boolean = false): T {
+  return new Proxy(instance, {
+    set(target, key, value) {
+      const result = Reflect.set(target, key, value);
+
+      // Auto-save on property changes (but not methods)
+      if (typeof value !== 'function' && key !== 'constructor') {
+        target.save().catch(console.error);
+      }
+
+      return result;
+    },
+
+    get(target, key) {
+      const value = Reflect.get(target, key);
+
+      // Optional: Dev mode logging for method calls
+      if (dev && typeof value === 'function' && key !== 'constructor') {
+        return function (this: any, ...args: any[]) {
+          console.time(`[${String(key)}]`);
+          const result = value.apply(this, args);
+
+          if (result instanceof Promise) {
+            return result.finally(() => console.timeEnd(`[${String(key)}]`));
+          }
+
+          console.timeEnd(`[${String(key)}]`);
+          return result;
+        };
+      }
+
+      return value;
     }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYSTEM NOTIFICATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function sendNotification(title: string, message: string): Promise<void> {
+  try {
+    // Try notify-send (Linux)
+    const result = await Bun.spawn(['notify-send', title, message], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }).exited;
+
+    if (result !== 0) {
+      // Fallback: just log if notify-send fails
+      console.log(`[NOTIFY] ${title}: ${message}`);
+    }
+  } catch (error) {
+    // notify-send not available, just log
+    console.log(`[NOTIFY] ${title}: ${message}`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLI PARSER
+// ═══════════════════════════════════════════════════════════════════════════
+
+function parseCLI(): { serve: boolean; port?: number; dev: boolean; notify: boolean; method?: string; methodArgs: any[] } {
+  const args = process.argv.slice(2);
+  const flags = {
+    serve: args.includes('--serve'),
+    port: undefined as number | undefined,
+    dev: args.includes('--dev'),
+    notify: args.includes('--notify'),
+    method: undefined as string | undefined,
+    methodArgs: [] as any[],
   };
 
-  // ── get ────────────────────────────────────────────────────────────────
-  if (command === "get" && key) {
-    const isRunning = await app.probe();
-    const state = isRunning
-      ? await fetch(`http://localhost:${app.port}/state`).then(r => r.json())
-      : app.getState();
-    handleResult((state as T)[key as keyof T]);
-    process.exit(0);
+  const portIndex = args.indexOf('--port');
+  if (portIndex !== -1 && args[portIndex + 1]) {
+    flags.port = parseInt(args[portIndex + 1]!, 10);
   }
 
-  // ── set ────────────────────────────────────────────────────────────────
-  if (command === "set" && key && value !== undefined) {
-    const newState = await app.set({ [key]: value } as Partial<T>);
-    handleResult(newState?.[key as keyof T]);
-    process.exit(0);
-  }
+  // Find first non-flag argument as method name
+  const portValue = portIndex !== -1 ? args[portIndex + 1] : undefined;
+  const nonFlagArgs = args.filter(arg => !arg.startsWith('--') && arg !== portValue);
 
-  // ── call ───────────────────────────────────────────────────────────────
-  if (command === "call" && key) {
-    const isRunning = await app.probe();
-
-    // Remote instance exists → proxy the call and exit
-    if (isRunning) {
-      const res = await fetch(`http://localhost:${app.port}/${key}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify([]),
-      }).then(r => r.json());
-      handleResult((res as { result?: any }).result);
-      process.exit(0);
-    }
-
-    // No server yet → start one, THEN invoke the method locally, THEN return
-    return startServer(app, {
-      port: app.port,
-      routes: buildRoutes(app),
-    }).then(async () => {
-      const res = await (app as any)[key]();
-      handleResult(res);
+  if (nonFlagArgs.length > 0) {
+    flags.method = nonFlagArgs[0];
+    // Parse remaining arguments as JSON if possible, otherwise keep as strings
+    flags.methodArgs = nonFlagArgs.slice(1).map(arg => {
+      try {
+        return JSON.parse(arg);
+      } catch {
+        return arg;
+      }
     });
   }
 
-  // ── default: just start the server ─────────────────────────────────────
-  return startServer(app, { port: app.port, routes: buildRoutes(app) });
+  return flags;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SERVER
+// ═══════════════════════════════════════════════════════════════════════════
 
-function buildRoutes<T extends Record<string, any>>(app: DynamicServerApp<T>): Record<string, RemoteAction<T>> {
-  return Object.getOwnPropertyNames(Object.getPrototypeOf(app))
-    .filter(k => k !== "constructor" && typeof (app as any)[k] === "function")
-    .reduce((routes, key) => {
-      routes[`/${key}`] = async (app, args) => await (app as any)[key](...(Array.isArray(args) ? args : []));
-      return routes;
-    }, {} as Record<string, RemoteAction<T>>);
-}
-
-export type RemoteAction<T extends Record<string, any>> = (app: DynamicServerApp<T>, args?: any) => Promise<any>;
-
-export async function startServer<T extends Record<string, any>>(
-  app: DynamicServerApp<T>,
-  options: { port?: number; routes?: Record<string, RemoteAction<T>> } = {}
-) {
-  let port = await findAvailablePort(options.port ?? 2001);
-  app.port = port;
-  const routes = options.routes ?? {};
-
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
-    const method = req.method ?? "GET";
-
-    if (url.pathname === "/state") {
-      if (method === "GET") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(app.getState()));
-      } else if (method === "POST") {
-        let body = "";
-        req.on("data", chunk => (body += chunk));
-        req.on("end", () => {
-          try {
-            const parsed = JSON.parse(body);
-            const patch: Partial<T> = {};
-            const current = app.getState();
-            for (const key in parsed) {
-              if (!isEqual(parsed[key], current[key])) (patch as any)[key] = parsed[key];
-            }
-            if (Object.keys(patch).length) app.applyStateUpdate(patch);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "ok", state: app.getState() }));
-          } catch (err: any) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: err.message || "Invalid JSON" }));
-          }
-        });
-      } else {
-        res.writeHead(405);
-        res.end("Method Not Allowed");
-      }
-      return;
-    }
-
-    if (method === "POST" && routes[url.pathname]) {
-      let body = "";
-      req.on("data", chunk => (body += chunk));
-      req.on("end", async () => {
-        try {
-          const parsed = JSON.parse(body);
-          const result = await routes[url.pathname]!(app, parsed);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", result }));
-        } catch (err: any) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err.message }));
-        }
-      });
-      return;
-    }
-
-    res.writeHead(404);
-    res.end("Not Found");
-  });
-
-  app.isServerInstance = true;
-  server.listen(port, () => {
-    if ((app as any).notifyEnabled) sendNotification("🟢 Server Started", `Listening on port ${port}`);
-  });
-}
-
-export function cliToState<T extends Record<string, any>>(defaults: T): {
-  command: "get" | "set" | "call" | null;
-  key?: string;
-  value?: string;
-  returnOutput: boolean;
-  notify: boolean;
-} {
-  const args = process.argv.slice(2);
-  let command: "get" | "set" | "call" | null = null;
-  let returnOutput = false;
-  let notify = false;
-  let key: string | undefined;
-  let value: string | undefined;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (typeof arg === "string" && ["get", "set", "call"].includes(arg)) {
-      command = arg as any;
-      key = args[i + 1];
-      value = args[i + 2];
-    }
-    if (arg === "--return") returnOutput = true;
-    if (arg === "--notify") notify = true;
-  }
-  return { command, key, value, returnOutput, notify };
-}
-
-export function diffStatePatch<T extends Record<string, any>>(cliArgs: T, current: Partial<T>): Partial<T> {
-  return Object.fromEntries(Object.entries(cliArgs).filter(([k, v]) => v !== undefined && v !== current[k])) as Partial<T>;
-}
-
-export function sendNotification(title: string, body: string) {
-  exec(`notify-send "${title}" "${body.replace(/"/g, '\\"')}"`);
-}
-
-async function findAvailablePort(start: number, maxAttempts = 50): Promise<number> {
-  for (let port = start, i = 0; i < maxAttempts; i++, port++) {
+async function findAvailablePort(start: number): Promise<number> {
+  for (let port = start; port < start + 50; port++) {
     const isFree = await new Promise<boolean>(resolve => {
-      const server = net.createServer()
-        .once("error", () => resolve(false))
-        .once("listening", () => server.close(() => resolve(true)))
+      const server: net.Server = net.createServer()
+        .once('error', () => resolve(false))
+        .once('listening', () => server.close(() => resolve(true)))
         .listen(port);
     });
     if (isFree) return port;
   }
   throw new Error(`No available ports found starting from ${start}`);
+}
+
+async function serve<T extends App>(app: T, requestedPort: number): Promise<void> {
+  // Check if port is already in use
+  const isRunning = await app.probe();
+  if (isRunning) {
+    console.log(`[${requestedPort}] Server already running, finding next available port...`);
+  }
+
+  const port = await findAvailablePort(requestedPort);
+  app.port = port;
+
+  const server = Bun.serve({
+    port,
+    async fetch(req) {
+      const url = new URL(req.url);
+
+      // Health check
+      if (url.pathname === '/health') {
+        return Response.json({ ok: true });
+      }
+
+      // State endpoints
+      if (url.pathname === '/state') {
+        if (req.method === 'GET') {
+          return Response.json(app.toJSON());
+        }
+
+        if (req.method === 'POST') {
+          const body = await req.json() as Record<string, JSONValue>;
+
+          // Calculate diff
+          const current = app.toJSON();
+          const patch: Record<string, JSONValue> = {};
+          for (const key in body) {
+            if (!isEqual(body[key], current[key])) {
+              const value = body[key];
+              if (value !== undefined) {
+                patch[key] = value;
+              }
+            }
+          }
+
+          // Apply updates
+          if (Object.keys(patch).length > 0) {
+            app.fromJSON(patch);
+            await app.save();
+          }
+
+          return Response.json({ ok: true, state: app.toJSON() });
+        }
+      }
+
+      // JSON-RPC method dispatch
+      if (req.method === 'POST') {
+        try {
+          const { method, params = [] } = await req.json() as { method: string; params?: any[] };
+
+          if (typeof (app as any)[method] === 'function') {
+            const result = await (app as any)[method](...params);
+            return Response.json({ result });
+          }
+
+          return Response.json({ error: 'Method not found' }, { status: 404 });
+        } catch (error: any) {
+          return Response.json({ error: error.message }, { status: 500 });
+        }
+      }
+
+      return new Response('Not Found', { status: 404 });
+    }
+  });
+
+  console.log(`[${port}] Server started`);
+
+  // Graceful shutdown
+  const shutdown = () => {
+    server.stop();
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN RUNNER
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function run<T extends App>(app: T): Promise<void> {
+  const { serve: shouldServe, port, dev, notify, method, methodArgs } = parseCLI();
+
+  // Set port if provided
+  if (port) app.port = port;
+
+  // Load existing state
+  await app.load();
+
+  // Wrap in auto-save proxy
+  const statefulApp = createStatefulProxy(app, dev);
+
+  // Server mode
+  if (shouldServe) {
+    await serve(statefulApp, app.port);
+    return;
+  }
+
+  // Local mode - run specified method or defaultFunction
+  const functionToCall = method || 'defaultFunction';
+
+  if (typeof (statefulApp as any)[functionToCall] === 'function') {
+    try {
+      const result = await (statefulApp as any)[functionToCall](...methodArgs);
+      if (result !== undefined) {
+        console.log(result);
+
+        // Send notification if --notify flag is set
+        if (notify) {
+          const message = typeof result === 'string' ? result : JSON.stringify(result);
+          await sendNotification(functionToCall, message);
+        }
+      }
+    } catch (error: any) {
+      console.error('Error:', error.message);
+
+      // Send error notification if --notify flag is set
+      if (notify) {
+        await sendNotification(`Error: ${functionToCall}`, error.message);
+      }
+
+      process.exit(1);
+    }
+  } else {
+    console.error(`Error: Method '${functionToCall}' not found`);
+    process.exit(1);
+  }
 }

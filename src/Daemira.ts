@@ -1,50 +1,105 @@
-import { z } from "zod";
-import { DynamicServerApp } from "../core/app";
+import { App } from "../core/app";
 import { spawn } from "child_process";
 
-export type DaemiraState = z.infer<typeof DaemiraSchema>;
-export const DaemiraSchema = z.object({
-  port: z.number(),
-  systemMessage: z.string().optional(),
-});
+export class Daemira extends App {
+  systemLog: string[] = [];
 
-export class Daemira extends DynamicServerApp<DaemiraState> {
-  schema = DaemiraSchema;
-  port = 2005;
+  setSystemMessage(message: string): void {
+    this.systemLog.push(message);
+    console.log(`🔹 ${message}`);
+  }
 
   async keepSystemUpdated(): Promise<string> {
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-    let hasUpdatedToday = false;
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+
     (async () => {
       while (true) {
-        const now = new Date();
-        const hour = now.getHours();
-        const minute = now.getMinutes();
-        if (hour === 2 && minute === 9 && !hasUpdatedToday) {
-          await this.updateSystem();
-          hasUpdatedToday = true;
-        }
-        if (hour === 8 && hasUpdatedToday) {
-          hasUpdatedToday = false;
-        }
-        await sleep(60_000);
+        this.setSystemMessage("🕐 Starting scheduled system update...");
+        await this.updateSystem();
+        this.setSystemMessage(`⏰ Next update scheduled in 6 hours.`);
+        await sleep(SIX_HOURS);
       }
     })();
-    return "System update scheduler started.";
+
+    return "System update scheduler started (runs every 6 hours).";
   }
 
   private async updateSystem(): Promise<void> {
     const steps = [
-      { name: "Updating package databases", cmd: "sudo pacman -Sy" },
-      { name: "Upgrading packages", cmd: "sudo pacman -Su --noconfirm" },
-      { name: "Cleaning up", cmd: "sudo paccache -r" },
+      { name: "Refreshing mirrorlist", cmd: "sudo pacman-mirrors --fasttrack" },
+      { name: "Updating keyrings", cmd: "sudo pacman -Sy --needed --noconfirm archlinux-keyring cachyos-keyring" },
+      { name: "Updating package databases", cmd: "sudo pacman -Syy" },
+      { name: "Upgrading packages", cmd: "sudo pacman -Syu --noconfirm" },
+      { name: "Updating AUR packages", cmd: "yay -Sua --noconfirm" },
+      { name: "Updating firmware", cmd: "sudo fwupdmgr refresh --force && sudo fwupdmgr update -y" },
+      { name: "Removing orphaned packages", cmd: "sudo pacman -Rns --noconfirm $(pacman -Qdtq)" },
+      { name: "Cleaning package cache", cmd: "sudo paccache -rk2" },
+      { name: "Cleaning uninstalled cache", cmd: "sudo paccache -ruk0" },
+      { name: "Cleaning yay cache", cmd: "yay -Sc --noconfirm" },
+      { name: "Optimizing pacman database", cmd: "sudo pacman-optimize" },
+      { name: "Updating GRUB", cmd: "sudo grub-mkconfig -o /boot/grub/grub.cfg" },
+      { name: "Reloading systemd daemon", cmd: "sudo systemctl daemon-reload" },
     ];
+
     for (const step of steps) {
       this.systemLog.push(`🔹 ${step.name}...`);
-      await runCommand(step.cmd, (line) => this.setSystemMessage(line));
-      this.systemLog.push(`🔹 Done: ${step.name}`);
+      try {
+        const exitCode = await runCommand(step.cmd, (line) => this.setSystemMessage(line));
+        if (exitCode === 0) {
+          this.systemLog.push(`✅ Done: ${step.name}`);
+        } else {
+          this.systemLog.push(`⚠️ Warning: ${step.name} exited with code ${exitCode}`);
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        this.systemLog.push(`⚠️ Skipped: ${step.name} - ${errorMsg}`);
+      }
     }
+
+    await this.checkPacnewFiles();
+    await this.checkRebootRequired();
     this.setSystemMessage("✅ System update completed successfully.");
+  }
+
+  private async checkPacnewFiles(): Promise<void> {
+    try {
+      const pacnewFiles: string[] = [];
+      const proc = spawn("bash", ["-c", "find /etc -name '*.pacnew' 2>/dev/null"]);
+
+      proc.stdout.on("data", (data) => {
+        const files = data.toString().split("\n").filter((line: string) => line.trim());
+        pacnewFiles.push(...files);
+      });
+
+      await new Promise((resolve) => proc.on("close", resolve));
+
+      if (pacnewFiles.length > 0) {
+        this.setSystemMessage(`⚠️ Found ${pacnewFiles.length} .pacnew file(s) that may need manual merging:`);
+        pacnewFiles.forEach((file) => this.setSystemMessage(`   ${file}`));
+        this.setSystemMessage("   Consider using 'pacdiff' to merge configuration changes.");
+      }
+    } catch (error) {
+      this.systemLog.push("⚠️ Could not check for .pacnew files");
+    }
+  }
+
+  private async checkRebootRequired(): Promise<void> {
+    try {
+      const checkKernel = async (): Promise<boolean> => {
+        return new Promise((resolve) => {
+          const proc = spawn("bash", ["-c", "[ -f /usr/lib/modules/$(uname -r)/modules.dep ]"]);
+          proc.on("close", (code) => resolve(code !== 0));
+        });
+      };
+
+      const needsReboot = await checkKernel();
+      if (needsReboot) {
+        this.setSystemMessage("🔄 Kernel update detected - reboot recommended for changes to take effect.");
+      }
+    } catch (error) {
+      this.systemLog.push("⚠️ Could not check reboot status");
+    }
   }
 }
 

@@ -27,17 +27,17 @@ export class Daemira extends App {
 
   private async updateSystem(): Promise<void> {
     const steps = [
-      { name: "Refreshing mirrorlist", cmd: "sudo pacman-mirrors --fasttrack" },
+      { name: "Refreshing mirrorlist", cmd: "sudo pacman-mirrors --fasttrack", optional: true },
       { name: "Updating keyrings", cmd: "sudo pacman -Sy --needed --noconfirm archlinux-keyring cachyos-keyring" },
-      { name: "Updating package databases", cmd: "sudo pacman -Syy" },
+      { name: "Updating package databases", cmd: "sudo pacman -Syy --noconfirm" },
       { name: "Upgrading packages", cmd: "sudo pacman -Syu --noconfirm" },
-      { name: "Updating AUR packages", cmd: "yay -Sua --noconfirm" },
-      { name: "Updating firmware", cmd: "sudo fwupdmgr refresh --force && sudo fwupdmgr update -y" },
-      { name: "Removing orphaned packages", cmd: "sudo pacman -Rns --noconfirm $(pacman -Qdtq)" },
+      { name: "Updating AUR packages", cmd: "yay -Sua --noconfirm --answerclean All --answerdiff None --answeredit None --removemake --cleanafter" },
+      { name: "Updating firmware", cmd: "sudo fwupdmgr refresh --force && sudo fwupdmgr update -y", optional: true },
+      { name: "Removing orphaned packages", cmd: "orphans=$(pacman -Qdtq 2>/dev/null); [ -z \"$orphans\" ] || sudo pacman -Rns --noconfirm $orphans" },
       { name: "Cleaning package cache", cmd: "sudo paccache -rk2" },
       { name: "Cleaning uninstalled cache", cmd: "sudo paccache -ruk0" },
-      { name: "Cleaning yay cache", cmd: "yay -Sc --noconfirm" },
-      { name: "Optimizing pacman database", cmd: "sudo pacman-optimize" },
+      { name: "Cleaning yay cache", cmd: "yay -Sc --noconfirm --answerclean All" },
+      { name: "Optimizing pacman database", cmd: "sudo pacman-optimize", optional: true },
       { name: "Updating GRUB", cmd: "sudo grub-mkconfig -o /boot/grub/grub.cfg" },
       { name: "Reloading systemd daemon", cmd: "sudo systemctl daemon-reload" },
     ];
@@ -49,11 +49,19 @@ export class Daemira extends App {
         if (exitCode === 0) {
           this.systemLog.push(`✅ Done: ${step.name}`);
         } else {
-          this.systemLog.push(`⚠️ Warning: ${step.name} exited with code ${exitCode}`);
+          if (step.optional) {
+            this.systemLog.push(`⚠️ Skipped: ${step.name} (optional, exit code ${exitCode})`);
+          } else {
+            this.systemLog.push(`⚠️ Warning: ${step.name} exited with code ${exitCode}`);
+          }
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        this.systemLog.push(`⚠️ Skipped: ${step.name} - ${errorMsg}`);
+        if (step.optional) {
+          this.systemLog.push(`⚠️ Skipped: ${step.name} (optional) - ${errorMsg}`);
+        } else {
+          this.systemLog.push(`⚠️ Skipped: ${step.name} - ${errorMsg}`);
+        }
       }
     }
 
@@ -105,12 +113,10 @@ export class Daemira extends App {
 
 async function runCommand(cmd: string, onData: (line: string) => void): Promise<number> {
   return new Promise((resolve, reject) => {
-    const parts = cmd.split(" ");
-    if (!parts[0]) {
-      reject(new Error("No command specified"));
-      return;
-    }
-    const proc = spawn(parts[0], parts.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn("bash", ["-c", cmd], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, DEBIAN_FRONTEND: "noninteractive" }
+    });
     const handle = (data: Buffer) => {
       data.toString().split("\n").forEach((line) => {
         if (line.trim()) onData(line);

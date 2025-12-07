@@ -1,8 +1,42 @@
 import { App } from "../core/app";
 import { spawn } from "child_process";
+import { GoogleDriveSync } from "./google-drive/GoogleDriveSync";
 
 export class Daemira extends App {
   systemLog: string[] = [];
+  googleDriveSync: GoogleDriveSync | null = null;
+  googleDriveSyncAutoStarted: boolean = false;
+
+  constructor() {
+    super();
+    // Auto-start Google Drive sync in the background (non-blocking)
+    this.autoStartServices();
+  }
+
+  /**
+   * Auto-start services (called in constructor)
+   */
+  private autoStartServices(): void {
+    // Run in background to not block constructor
+    setTimeout(async () => {
+      if (!this.googleDriveSyncAutoStarted) {
+        try {
+          await this.startGoogleDriveSync();
+          this.googleDriveSyncAutoStarted = true;
+        } catch (error) {
+          console.error("Failed to auto-start Google Drive sync:", error);
+        }
+      }
+    }, 1000);
+  }
+
+  /**
+   * Default function when no method is specified
+   */
+  async defaultFunction(): Promise<string> {
+    const status = this.getGoogleDriveSyncStatus();
+    return status;
+  }
 
   setSystemMessage(message: string): void {
     this.systemLog.push(message);
@@ -108,6 +142,122 @@ export class Daemira extends App {
     } catch (error) {
       this.systemLog.push("⚠️ Could not check reboot status");
     }
+  }
+
+  /**
+   * Start Google Drive sync service
+   */
+  async startGoogleDriveSync(): Promise<string> {
+    if (this.googleDriveSync && this.googleDriveSync.getStatus().running) {
+      return "Google Drive sync is already running.";
+    }
+
+    try {
+      this.googleDriveSync = new GoogleDriveSync("gdrive");
+      const result = await this.googleDriveSync.start();
+      this.setSystemMessage(result);
+      return result;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.setSystemMessage(`❌ Failed to start Google Drive sync: ${errorMsg}`);
+      return `Error: ${errorMsg}`;
+    }
+  }
+
+  /**
+   * Stop Google Drive sync service
+   */
+  async stopGoogleDriveSync(): Promise<string> {
+    if (!this.googleDriveSync) {
+      return "Google Drive sync is not initialized.";
+    }
+
+    const result = await this.googleDriveSync.stop();
+    this.setSystemMessage(result);
+    return result;
+  }
+
+  /**
+   * Get Google Drive sync status
+   */
+  getGoogleDriveSyncStatus(): string {
+    if (!this.googleDriveSync) {
+      return "Google Drive sync is not initialized.";
+    }
+
+    const status = this.googleDriveSync.getStatus();
+
+    let output = `📊 Google Drive Sync Status:\n`;
+    output += `  Running: ${status.running ? "✅" : "❌"}\n`;
+    output += `  Mode: ${status.syncMode} (every ${status.syncInterval}s)\n`;
+    output += `  Directories: ${status.directories}\n`;
+    output += `  Queue Size: ${status.queueSize}\n`;
+    output += `  Rate Limit Tokens: ${status.rateLimitTokens}/10\n\n`;
+
+    if (Object.keys(status.syncStates.syncStatus).length > 0) {
+      output += `  Directory States:\n`;
+      for (const [path, state] of Object.entries(status.syncStates.syncStatus)) {
+        const stateIcon = state === "idle" ? "✅" : state === "syncing" ? "🔄" : "❌";
+        const lastSync = status.syncStates.lastSyncTime[path];
+        const lastSyncStr = lastSync
+          ? new Date(lastSync).toLocaleString()
+          : "Never";
+
+        output += `    ${stateIcon} ${path}\n`;
+        output += `       Status: ${state}\n`;
+        output += `       Last sync: ${lastSyncStr}\n`;
+
+        if (status.syncStates.errorMessages[path]) {
+          output += `       Error: ${status.syncStates.errorMessages[path]}\n`;
+        }
+      }
+    }
+
+    return output;
+  }
+
+  /**
+   * Force sync all directories immediately
+   */
+  async syncAllGoogleDrive(): Promise<string> {
+    if (!this.googleDriveSync) {
+      return "Google Drive sync is not initialized. Start it first with startGoogleDriveSync().";
+    }
+
+    const result = await this.googleDriveSync.syncAll();
+    this.setSystemMessage(result);
+    return result;
+  }
+
+  /**
+   * View what patterns are excluded from Google Drive sync
+   */
+  getGoogleDriveExcludePatterns(): string {
+    if (!this.googleDriveSync) {
+      return "Google Drive sync is not initialized.";
+    }
+
+    const patterns = this.googleDriveSync.getExcludePatterns();
+    let output = `🚫 Google Drive Exclude Patterns (${patterns.length} total):\n\n`;
+
+    output += "These files/folders will NOT be synced:\n";
+    patterns.forEach((pattern, index) => {
+      output += `  ${index + 1}. ${pattern}\n`;
+    });
+
+    return output;
+  }
+
+  /**
+   * Add a custom exclude pattern to Google Drive sync
+   */
+  addGoogleDriveExcludePattern(pattern: string): string {
+    if (!this.googleDriveSync) {
+      return "Google Drive sync is not initialized.";
+    }
+
+    this.googleDriveSync.addExcludePattern(pattern);
+    return `✅ Added exclude pattern: ${pattern}`;
   }
 }
 

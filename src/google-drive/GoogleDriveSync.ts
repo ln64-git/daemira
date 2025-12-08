@@ -1,13 +1,17 @@
-import { watch } from "fs";
-import type { FSWatcher } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { runRcloneCommand, checkRcloneConfig, needsResync, ensureRemoteDirectory, clearBisyncLocks } from "./rclone";
+import { runRcloneCommand, checkRcloneConfig, needsResync, clearBisyncLocks } from "./rclone";
+
+// Configuration constants
+const CONFIG = {
+  DEBOUNCE_DELAY_MS: 2000,        // Delay before syncing after file change (2 seconds)
+  PERIODIC_SYNC_DELAY_MS: 30000,  // Periodic sync interval (30 seconds)
+  QUEUE_PROCESS_INTERVAL_MS: 1000, // How often to process sync queue (1 second)
+} as const;
 
 interface SyncDirectory {
   localPath: string;
   remotePath: string;
-  watcher?: FSWatcher;
   needsInitialSync: boolean;
 }
 
@@ -24,66 +28,18 @@ interface SyncState {
 }
 
 /**
- * Token bucket rate limiter for controlling sync operations
- */
-class RateLimiter {
-  private tokens: number;
-  private lastRefill: number;
-  private readonly maxTokens: number;
-  private readonly refillRate: number; // tokens per second
-
-  constructor(maxTokens: number = 10, refillRate: number = 10) {
-    this.maxTokens = maxTokens;
-    this.refillRate = refillRate;
-    this.tokens = maxTokens;
-    this.lastRefill = Date.now();
-  }
-
-  private refill(): void {
-    const now = Date.now();
-    const timePassed = (now - this.lastRefill) / 1000; // seconds
-    const tokensToAdd = timePassed * this.refillRate;
-
-    this.tokens = Math.min(this.maxTokens, this.tokens + tokensToAdd);
-    this.lastRefill = now;
-  }
-
-  async acquire(tokens: number = 1): Promise<void> {
-    while (true) {
-      this.refill();
-
-      if (this.tokens >= tokens) {
-        this.tokens -= tokens;
-        return;
-      }
-
-      // Wait until we have enough tokens
-      const tokensNeeded = tokens - this.tokens;
-      const waitTime = (tokensNeeded / this.refillRate) * 1000;
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
-    }
-  }
-
-  getAvailableTokens(): number {
-    this.refill();
-    return Math.floor(this.tokens);
-  }
-}
-
-/**
  * Google Drive sync service using rclone
  */
 export class GoogleDriveSync {
   private directories: Map<string, SyncDirectory> = new Map();
   private syncQueue: Map<string, SyncOperation> = new Map();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
-  private rateLimiter: RateLimiter;
   private isRunning: boolean = false;
   private processInterval?: NodeJS.Timeout;
   private periodicSyncInterval?: NodeJS.Timeout;
   private remoteName: string = "gdrive";
-  private debounceDelay: number = 2000; // 2 seconds
-  private periodicSyncDelay: number = 30000; // 30 seconds
+  private debounceDelay: number = CONFIG.DEBOUNCE_DELAY_MS;
+  private periodicSyncDelay: number = CONFIG.PERIODIC_SYNC_DELAY_MS;
   private excludePatterns: string[] = [];
 
   public state: SyncState = {
@@ -94,7 +50,6 @@ export class GoogleDriveSync {
 
   constructor(remoteName: string = "gdrive") {
     this.remoteName = remoteName;
-    this.rateLimiter = new RateLimiter(10, 10); // 10 operations per second
     this.setupExcludePatterns();
   }
 
@@ -305,7 +260,7 @@ export class GoogleDriveSync {
     this.startWatchers();
 
     // Start queue processor
-    this.processInterval = setInterval(() => this.processQueue(), 1000);
+    this.processInterval = setInterval(() => this.processQueue(), CONFIG.QUEUE_PROCESS_INTERVAL_MS);
 
     // Start periodic sync timer
     this.periodicSyncInterval = setInterval(() => {
@@ -424,7 +379,7 @@ export class GoogleDriveSync {
   }
 
   /**
-   * Process queued sync operations with rate limiting
+   * Process queued sync operations (one at a time to avoid overwhelming the system)
    */
   private async processQueue(): Promise<void> {
     if (this.syncQueue.size === 0) return;
@@ -441,10 +396,7 @@ export class GoogleDriveSync {
       return;
     }
 
-    // Acquire rate limit token
-    await this.rateLimiter.acquire(1);
-
-    // Remove from queue and sync
+    // Remove from queue and sync (one at a time)
     this.syncQueue.delete(path);
     await this.syncDirectory(path);
   }
@@ -576,12 +528,7 @@ export class GoogleDriveSync {
       this.periodicSyncInterval = undefined;
     }
 
-    // Close all watchers (none in periodic mode, but keep for compatibility)
-    for (const dir of this.directories.values()) {
-      if (dir.watcher) {
-        dir.watcher.close();
-      }
-    }
+    // Watchers are not used in periodic mode
 
     return "✅ Google Drive sync stopped.";
   }
@@ -593,7 +540,6 @@ export class GoogleDriveSync {
     running: boolean;
     directories: number;
     queueSize: number;
-    rateLimitTokens: number;
     syncStates: SyncState;
     syncMode: string;
     syncInterval: number;
@@ -602,7 +548,6 @@ export class GoogleDriveSync {
       running: this.isRunning,
       directories: this.directories.size,
       queueSize: this.syncQueue.size,
-      rateLimitTokens: this.rateLimiter.getAvailableTokens(),
       syncStates: this.state,
       syncMode: "periodic",
       syncInterval: this.periodicSyncDelay / 1000, // in seconds

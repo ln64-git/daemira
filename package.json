@@ -1,11 +1,13 @@
 {
   "name": "daemira",
-  "module": "main.tsx",
+  "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "bun run core/main.tsx --serve",
-    "watch": "bun --watch core/main.tsx "
+    "start": "bun run index.ts --serve",
+    "dev": "bun --watch index.ts --serve",
+    "status": "bun run index.ts",
+    "sync": "bun run index.ts syncAllGoogleDrive"
   },
   "devDependencies": {
     "@types/bun": "latest",

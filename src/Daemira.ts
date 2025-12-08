@@ -1,14 +1,12 @@
-import { App } from "../core/app";
 import { spawn } from "child_process";
 import { GoogleDriveSync } from "./google-drive/GoogleDriveSync";
 
-export class Daemira extends App {
+export class Daemira {
   systemLog: string[] = [];
   googleDriveSync: GoogleDriveSync | null = null;
   googleDriveSyncAutoStarted: boolean = false;
 
   constructor() {
-    super();
     // Auto-start Google Drive sync in the background (non-blocking)
     this.autoStartServices();
   }
@@ -191,8 +189,7 @@ export class Daemira extends App {
     output += `  Running: ${status.running ? "✅" : "❌"}\n`;
     output += `  Mode: ${status.syncMode} (every ${status.syncInterval}s)\n`;
     output += `  Directories: ${status.directories}\n`;
-    output += `  Queue Size: ${status.queueSize}\n`;
-    output += `  Rate Limit Tokens: ${status.rateLimitTokens}/10\n\n`;
+    output += `  Queue Size: ${status.queueSize}\n\n`;
 
     if (Object.keys(status.syncStates.syncStatus).length > 0) {
       output += `  Directory States:\n`;
@@ -212,7 +209,6 @@ export class Daemira extends App {
         }
       }
     }
-
     return output;
   }
 

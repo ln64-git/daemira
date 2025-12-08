@@ -139,14 +139,6 @@ export async function checkRcloneConfig(remoteName: string = "gdrive"): Promise<
 }
 
 /**
- * Get the rclone config file path
- */
-export function getRcloneConfigPath(): string {
-  const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  return join(configHome, "rclone", "rclone.conf");
-}
-
-/**
  * Check if a directory needs initial resync (first time sync)
  */
 export async function needsResync(localPath: string, remotePath: string): Promise<boolean> {
@@ -170,35 +162,6 @@ export async function needsResync(localPath: string, remotePath: string): Promis
 
   // If it mentions resync or first run, we need to do initial sync
   return testResult.error.includes("--resync") || testResult.error.includes("first run");
-}
-
-/**
- * Create a directory on the remote if it doesn't exist
- */
-export async function ensureRemoteDirectory(remotePath: string): Promise<{
-  success: boolean;
-  error?: string;
-}> {
-  // Just try to create the directory - mkdir will succeed if it already exists
-  // or if it needs to be created. Add verbose flag for debugging and use shorter timeout.
-  const mkdirResult = await runRcloneCommand(["mkdir", remotePath, "-v"], undefined, 15000);
-
-  if (mkdirResult.timedOut) {
-    return {
-      success: false,
-      error: "Command timed out - check your Google Drive connection and authentication",
-    };
-  }
-
-  // Exit code 0 means success (created or already exists)
-  if (mkdirResult.exitCode === 0) {
-    return { success: true };
-  } else {
-    return {
-      success: false,
-      error: mkdirResult.error || mkdirResult.output || "Failed to create directory",
-    };
-  }
 }
 
 /**

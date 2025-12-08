@@ -1,13 +1,18 @@
 {
   "name": "daemira",
-  "module": "index.ts",
+  "version": "2.0.0",
+  "description": "Personal system utility daemon for Google Drive sync and system maintenance",
+  "module": "daemira.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "bun run index.ts --serve",
-    "dev": "bun --watch index.ts --serve",
-    "status": "bun run index.ts",
-    "sync": "bun run index.ts syncAllGoogleDrive"
+    "start": "bun run src/main.ts",
+    "dev": "bun --watch src/main.ts",
+    "gdrive:status": "bun run src/main.ts gdrive:status",
+    "gdrive:sync": "bun run src/main.ts gdrive:sync",
+    "gdrive:patterns": "bun run src/main.ts gdrive:patterns",
+    "system:update": "bun run src/main.ts system:update",
+    "system:status": "bun run src/main.ts system:status"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -17,8 +22,10 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@notionhq/client": "^2.2.15",
     "@types/lodash": "^4.17.17",
     "@types/react": "^19.1.6",
+    "dotenv": "^16.4.7",
     "ink": "^6.0.0",
     "ink-select-input": "^6.2.0",
     "ink-text-input": "^6.0.0",

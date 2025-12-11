@@ -77,7 +77,14 @@ export class Shell {
 				timeoutHandle = setTimeout(() => {
 					if (!completed) {
 						completed = true;
+						// Try graceful termination first
 						proc.kill("SIGTERM");
+						// Force kill after short delay if still running
+						setTimeout(() => {
+							if (!proc.killed) {
+								proc.kill("SIGKILL");
+							}
+						}, 1000);
 						this.logger.warn(
 							`Command timed out after ${timeout}ms: ${command}`,
 						);

@@ -13,9 +13,9 @@
 
 import { Shell } from "../../utility/Shell";
 import { Logger } from "../../utility/Logger";
-import { DiskMonitor } from "../system-monitor/DiskMonitor.js";
-import { PerformanceManager } from "../system-monitor/PerformanceManager.js";
-import { MemoryMonitor } from "../system-monitor/MemoryMonitor.js";
+import { DiskMonitor } from "../system-health/DiskMonitor.js";
+import { PerformanceManager } from "../system-health/PerformanceManager.js";
+import { MemoryMonitor } from "../system-health/MemoryMonitor.js";
 
 export interface SystemUpdateOptions {
 	interval?: number; // milliseconds (default: 6 hours)

@@ -10,16 +10,15 @@
 import { GoogleDrive } from "./utility/GoogleDrive";
 import { Logger } from "./utility/Logger";
 import { config } from "./config";
-import { DiskMonitor } from "./features/system-monitor/DiskMonitor.js";
-import { PerformanceManager } from "./features/system-monitor/PerformanceManager.js";
-import { MemoryMonitor } from "./features/system-monitor/MemoryMonitor.js";
-import type { PowerProfile } from "./features/system-monitor/PerformanceManager.js";
+import { DiskMonitor } from "./features/system-health/DiskMonitor.js";
+import { PerformanceManager } from "./features/system-health/PerformanceManager.js";
+import { MemoryMonitor } from "./features/system-health/MemoryMonitor.js";
+import type { PowerProfile } from "./features/system-health/PerformanceManager.js";
 import { SystemUpdate } from "./features/system-update/SystemUpdate.js";
 import { DesktopIntegration } from "./features/desktop-monitor/DesktopIntegration.js";
 
 export class Daemira {
 	private logger = Logger.getInstance();
-	private systemLog: string[] = [];
 	private googleDrive: GoogleDrive | null = null;
 	private googleDriveAutoStarted = false;
 	private systemUpdate: SystemUpdate | null = null;
@@ -57,21 +56,6 @@ export class Daemira {
 		}, 1000);
 	}
 
-	/**
-	 * Default function - show Google Drive status
-	 */
-	async defaultFunction(): Promise<string> {
-		return this.getGoogleDriveSyncStatus();
-	}
-
-	/**
-	 * Add a system message to log
-	 */
-	setSystemMessage(message: string): void {
-		this.systemLog.push(message);
-		this.logger.info(message);
-	}
-
 	// ==================== Google Drive Methods ====================
 
 	/**
@@ -85,11 +69,11 @@ export class Daemira {
 		try {
 			this.googleDrive = new GoogleDrive(config.rcloneRemoteName);
 			const result = await this.googleDrive.start();
-			this.setSystemMessage(result);
+			console.log(result);
 			return result;
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			this.setSystemMessage(`Failed to start Google Drive sync: ${errorMsg}`);
+			console.log(`Failed to start Google Drive sync: ${errorMsg}`);
 			return `Error: ${errorMsg}`;
 		}
 	}
@@ -103,7 +87,7 @@ export class Daemira {
 		}
 
 		const result = await this.googleDrive.stop();
-		this.setSystemMessage(result);
+		console.log(result);
 		return result;
 	}
 
@@ -156,7 +140,7 @@ export class Daemira {
 		}
 
 		const result = await this.googleDrive.syncAll();
-		this.setSystemMessage(result);
+		console.log(result);
 		return result;
 	}
 

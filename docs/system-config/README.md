@@ -17,12 +17,16 @@ This directory contains comprehensive documentation of the system configuration 
 - [Shell Configuration](./11-shell-config.md) - Fish shell setup and user groups
 - [Package Management](./12-package-management.md) - pacman, AUR helpers, repositories
 - [Filesystem Configuration](./13-filesystem-config.md) - Disk layout and filesystem details
+- [Desktop Environment](./14-desktop-environment.md) - Quickshell DMS and Hyprland compositor
+- [Desktop Services Integration](./15-desktop-services-integration.md) - DBus services and IPC integration
 
 ## Quick Reference
 
 - **OS**: CachyOS (Arch-based)
 - **Kernel**: 6.18.0-1-cachyos-bmq-lto
-- **Window Manager**: Hyprland 0.52.2-2
+- **Desktop Shell**: Quickshell DMS (Material Design 3)
+- **Compositor**: Hyprland 0.52.2
+- **Display Server**: Wayland
 - **Audio System**: PipeWire 1.4.9-2.1 with WirePlumber 0.5.12-1.1
 - **Primary Browser**: Zen Browser 1.17.12b-1
 - **Shell**: Fish (with Starship prompt)
@@ -47,5 +51,5 @@ This directory contains comprehensive documentation of the system configuration 
 
 ## Last Updated
 
-2025-12-10
+2025-12-11
 

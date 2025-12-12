@@ -43,8 +43,31 @@
 
 Last system update: Recent (kernel errors suggest potential post-update issues)
 
+## Desktop Environment
+
+- **Desktop Shell**: Quickshell DMS
+  - Location: `/usr/share/quickshell/dms/`
+  - Configuration: `~/.config/quickshell/`
+  - Theme: Material Design 3 (dark)
+  - Services: 40 QML-based system integration services
+
+- **Compositor**: Hyprland 0.52.2
+  - Display Server: Wayland
+  - Configuration: `~/.config/hypr/hyprland.conf`
+  - IPC: `hyprctl` command-line interface
+  - Features: Dynamic tiling, VRR, multi-monitor support
+
+- **Session Management**:
+  - Display Manager: SDDM
+  - Session Type: Wayland
+  - Session Manager: systemd-logind
+  - Power Management: power-profiles-daemon
+
 ## Key System Services
 
 - **PipeWire**: Active (user service)
 - **WirePlumber**: Active (user service)
-- **Hyprland**: Running
+- **Hyprland**: Running (compositor)
+- **Quickshell**: Running (desktop shell)
+- **systemd-logind**: Active (session management)
+- **power-profiles-daemon**: Active (power profiles)

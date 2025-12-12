@@ -139,6 +139,37 @@ try {
 			console.log(result);
 			break;
 
+		// Desktop environment commands
+		case "desktop:status":
+			result = await daemon.getDesktopStatus();
+			console.log(result);
+			break;
+
+		case "desktop:session":
+			result = await daemon.getSessionInfo();
+			console.log(result);
+			break;
+
+		case "desktop:compositor":
+			result = await daemon.getCompositorInfo();
+			console.log(result);
+			break;
+
+		case "desktop:displays":
+			result = await daemon.getDisplayInfo();
+			console.log(result);
+			break;
+
+		case "desktop:lock":
+			result = await daemon.lockSession();
+			console.log(result);
+			break;
+
+		case "desktop:unlock":
+			result = await daemon.unlockSession();
+			console.log(result);
+			break;
+
 		// Comprehensive system status
 		case "status":
 			result = await daemon.getSystemStatus();

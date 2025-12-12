@@ -15,6 +15,7 @@ import { PerformanceManager } from "./features/system-monitor/PerformanceManager
 import { MemoryMonitor } from "./features/system-monitor/MemoryMonitor.js";
 import type { PowerProfile } from "./features/system-monitor/PerformanceManager.js";
 import { SystemUpdate } from "./features/system-update/SystemUpdate.js";
+import { DesktopIntegration } from "./features/desktop-monitor/DesktopIntegration.js";
 
 export class Daemira {
 	private logger = Logger.getInstance();
@@ -25,6 +26,7 @@ export class Daemira {
 	private diskMonitor = DiskMonitor.getInstance();
 	private performanceManager = PerformanceManager.getInstance();
 	private memoryMonitor = MemoryMonitor.getInstance();
+	private desktopIntegration = DesktopIntegration.getInstance();
 
 	constructor() {
 		this.logger.info("Daemira initializing...");
@@ -469,6 +471,38 @@ export class Daemira {
 			output += "System Update: Not initialized\n";
 		}
 
+		// Desktop Environment
+		try {
+			const desktopSummary = await this.desktopIntegration.getDesktopSummary();
+			output += `\nDesktop Environment:\n  ${desktopSummary}\n`;
+		} catch {
+			output += "\nDesktop Environment: Unable to query\n";
+		}
+
 		return output;
+	}
+
+	async getDesktopStatus(): Promise<string> {
+		return await this.desktopIntegration.getFormattedStatus();
+	}
+
+	async getSessionInfo(): Promise<string> {
+		return await this.desktopIntegration.getSessionStatus();
+	}
+
+	async getCompositorInfo(): Promise<string> {
+		return await this.desktopIntegration.getCompositorStatus();
+	}
+
+	async getDisplayInfo(): Promise<string> {
+		return await this.desktopIntegration.getDisplayStatus();
+	}
+
+	async lockSession(): Promise<string> {
+		return await this.desktopIntegration.lockSession();
+	}
+
+	async unlockSession(): Promise<string> {
+		return await this.desktopIntegration.unlockSession();
 	}
 }

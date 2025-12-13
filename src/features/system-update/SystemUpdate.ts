@@ -57,6 +57,46 @@ export class SystemUpdate {
 	}
 
 	/**
+	 * Check if passwordless sudo is available
+	 */
+	private async checkPasswordlessSudo(): Promise<boolean> {
+		try {
+			// Use -n flag to test if passwordless sudo works
+			const result = await Shell.execute("sudo -n true", {
+				timeout: 5000,
+				logCommand: false,
+			});
+			return result.exitCode === 0;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Check if running as root
+	 */
+	private isRoot(): boolean {
+		return process.getuid && process.getuid() === 0;
+	}
+
+	/**
+	 * Check if a command exists in PATH
+	 */
+	private async commandExists(command: string): Promise<boolean> {
+		try {
+			// Extract the base command (first word before space)
+			const baseCmd = command.split(/\s+/)[0].replace(/^sudo\s+-n\s+/, "").replace(/^sudo\s+/, "");
+			const result = await Shell.execute(`command -v ${baseCmd}`, {
+				timeout: 2000,
+				logCommand: false,
+			});
+			return result.exitCode === 0;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
 	 * Start the periodic update scheduler
 	 */
 	start(): void {
@@ -104,6 +144,26 @@ export class SystemUpdate {
 		this.logger.info("Starting system update...");
 		console.log("=== Starting System Update ===");
 		const startTime = Date.now();
+
+		// Check if passwordless sudo is available
+		if (!this.isRoot()) {
+			const hasPasswordlessSudo = await this.checkPasswordlessSudo();
+			if (!hasPasswordlessSudo) {
+				const username = process.env.USER || "ln64";
+				const errorMsg = "Passwordless sudo is not configured. System updates require sudo access without password prompts.";
+				console.error(`\n✗ ERROR: ${errorMsg}`);
+				console.error("\nEASIEST: Run the setup script:");
+				console.error("  sudo ./scripts/setup-passwordless-sudo.sh");
+				console.error("\nMANUAL: Or configure manually:");
+				console.error("  sudo visudo");
+				console.error(`\nThen add this line (replace '${username}' with your username if different):`);
+				console.error(`  ${username} ALL=(ALL) NOPASSWD: /usr/bin/pacman, /usr/bin/paccache, /usr/bin/pacman-optimize, /usr/bin/grub-mkconfig, /usr/bin/systemctl, /usr/bin/fwupdmgr, /usr/bin/fstrim, /usr/bin/dkms`);
+				console.error("\nOr for all commands (less secure but simpler):");
+				console.error(`  ${username} ALL=(ALL) NOPASSWD: ALL`);
+				this.logger.error(errorMsg);
+				throw new Error(errorMsg);
+			}
+		}
 
 		try {
 			await this._executeUpdateSteps();
@@ -168,20 +228,20 @@ export class SystemUpdate {
 		const steps: UpdateStep[] = [
 			{
 				name: "Refreshing mirrorlist",
-				cmd: "sudo pacman-mirrors --fasttrack",
+				cmd: "sudo -n pacman-mirrors --fasttrack",
 				optional: true,
 			},
 			{
 				name: "Updating keyrings",
-				cmd: "sudo pacman -Sy --needed --noconfirm archlinux-keyring cachyos-keyring",
+				cmd: "sudo -n pacman -Sy --needed --noconfirm archlinux-keyring cachyos-keyring",
 			},
 			{
 				name: "Updating package databases",
-				cmd: "sudo pacman -Syy --noconfirm",
+				cmd: "sudo -n pacman -Syy --noconfirm",
 			},
 			{
 				name: "Upgrading packages",
-				cmd: "sudo pacman -Syu --noconfirm",
+				cmd: "sudo -n pacman -Syu --noconfirm",
 			},
 			{
 				name: "Updating AUR packages",
@@ -189,20 +249,20 @@ export class SystemUpdate {
 			},
 			{
 				name: "Updating firmware",
-				cmd: "sudo fwupdmgr refresh --force && sudo fwupdmgr update -y",
+				cmd: "sudo -n fwupdmgr refresh --force && sudo -n fwupdmgr update -y",
 				optional: true,
 			},
 			{
 				name: "Removing orphaned packages",
-				cmd: 'orphans=$(pacman -Qdtq 2>/dev/null); [ -z "$orphans" ] || sudo pacman -Rns --noconfirm $orphans',
+				cmd: 'orphans=$(pacman -Qdtq 2>/dev/null); [ -z "$orphans" ] || sudo -n pacman -Rns --noconfirm $orphans',
 			},
 			{
 				name: "Cleaning package cache",
-				cmd: "sudo paccache -rk2",
+				cmd: "sudo -n paccache -rk2",
 			},
 			{
 				name: "Cleaning uninstalled cache",
-				cmd: "sudo paccache -ruk0",
+				cmd: "sudo -n paccache -ruk0",
 			},
 			{
 				name: "Cleaning yay cache",
@@ -210,16 +270,16 @@ export class SystemUpdate {
 			},
 			{
 				name: "Optimizing pacman database",
-				cmd: "sudo pacman-optimize",
+				cmd: "sudo -n pacman-optimize",
 				optional: true,
 			},
 			{
 				name: "Updating GRUB",
-				cmd: "sudo grub-mkconfig -o /boot/grub/grub.cfg",
+				cmd: "sudo -n grub-mkconfig -o /boot/grub/grub.cfg",
 			},
 			{
 				name: "Reloading systemd daemon",
-				cmd: "sudo systemctl daemon-reload",
+				cmd: "sudo -n systemctl daemon-reload",
 			},
 		];
 
@@ -232,6 +292,17 @@ export class SystemUpdate {
 			const currentStep = step; // Create a const reference for TypeScript narrowing
 			this.logger.info(`Step ${stepNum}/${steps.length}: ${currentStep.name}`);
 			console.log(`\n[${stepNum}/${steps.length}] ${currentStep.name}...`);
+
+			// For optional steps, check if command exists first
+			if (currentStep.optional) {
+				const cmdExists = await this.commandExists(currentStep.cmd);
+				if (!cmdExists) {
+					const skipMsg = `Skipped (optional): ${currentStep.name} - command not available on this system`;
+					this.logger.info(skipMsg);
+					console.log(`  ⚠ ${skipMsg}`);
+					continue;
+				}
+			}
 
 			try {
 				// Use shorter timeout for first few commands to fail fast
@@ -303,16 +374,28 @@ export class SystemUpdate {
 					this.logger.info(`Completed: ${currentStep.name}`);
 					console.log(`  ✓ ${currentStep.name}`);
 				} else {
+					// Check for "command not found" errors
+					const isCommandNotFound = result.stderr && (
+						result.stderr.toLowerCase().includes("command not found") ||
+						result.stderr.toLowerCase().includes("no such file or directory")
+					);
+
 					if (currentStep.optional) {
-						const warnMsg = `Skipped (optional): ${currentStep.name} (exit code ${result.exitCode})`;
-						this.logger.warn(warnMsg);
-						console.log(`  ⚠ ${warnMsg}`);
+						if (isCommandNotFound) {
+							const skipMsg = `Skipped (optional): ${currentStep.name} - command not available on this system`;
+							this.logger.info(skipMsg);
+							console.log(`  ⚠ ${skipMsg}`);
+						} else {
+							const warnMsg = `Skipped (optional): ${currentStep.name} (exit code ${result.exitCode})`;
+							this.logger.warn(warnMsg);
+							console.log(`  ⚠ ${warnMsg}`);
+						}
 					} else {
 						const warnMsg = `Warning: ${currentStep.name} exited with code ${result.exitCode}`;
 						this.logger.warn(warnMsg);
 						console.log(`  ⚠ ${warnMsg}`);
 					}
-					if (result.stderr) {
+					if (result.stderr && !isCommandNotFound) {
 						// Check if it's a password prompt
 						if (result.stderr.toLowerCase().includes("password") ||
 							result.stderr.toLowerCase().includes("sudo: a password is required")) {
@@ -422,7 +505,7 @@ export class SystemUpdate {
 
 		try {
 			let passwordDetected = false;
-			const result = await Shell.execute("sudo fstrim -v /", {
+			const result = await Shell.execute("sudo -n fstrim -v /", {
 				timeout: 30000,
 				onStderr: (line) => {
 					// Check for password prompt
@@ -641,7 +724,7 @@ export class SystemUpdate {
 
 				// Run dkms autoinstall to rebuild if needed
 				let passwordDetected = false;
-				const result = await Shell.execute("sudo dkms autoinstall", {
+				const result = await Shell.execute("sudo -n dkms autoinstall", {
 					timeout: 120000, // 2 minutes
 					onStdout: (line) => this.logger.debug(`  ${line}`),
 					onStderr: (line) => {

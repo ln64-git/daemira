@@ -179,7 +179,7 @@ try {
 		// Default: start daemon with all services
 		case "start":
 		default:
-			logger.info("Starting Daemira daemon...");
+		logger.info("Starting Daemira daemon...");
 			result = await daemon.defaultFunction();
 			console.log(result);
 			// Keep process alive

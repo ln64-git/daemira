@@ -57,6 +57,37 @@ export class Daemira {
 	}
 
 	// ==================== Google Drive Methods ====================
+	/**
+	 * Default function - sync Google Drive, run system update and schedule 6-hour updates
+	 */
+	async defaultFunction(): Promise<string> {
+		const results: string[] = [];
+
+		// Sync Google Drive
+		try {
+			// Start Google Drive sync service if not already running
+			if (!this.googleDrive || !this.googleDrive.getStatus().running) {
+				await this.startGoogleDriveSync();
+			}
+			// Force sync all directories
+			const syncResult = await this.syncAllGoogleDrive();
+			results.push(`Google Drive: ${syncResult}`);
+		} catch (error) {
+			const errorMsg = error instanceof Error ? error.message : String(error);
+			results.push(`Google Drive sync error: ${errorMsg}`);
+		}
+
+		// Initialize system update if not already initialized with 6-hour interval
+		if (!this.systemUpdate) {
+			this.systemUpdate = new SystemUpdate({ interval: 6 * 60 * 60 * 1000 });
+		}
+
+		// Start scheduler (runs update immediately and schedules every 6 hours)
+		this.systemUpdate.start();
+		results.push("System update running. Scheduled updates every 6 hours.");
+
+		return results.join("\n");
+	}
 
 	/**
 	 * Start Google Drive sync service

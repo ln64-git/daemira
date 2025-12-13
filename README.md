@@ -1,244 +1,121 @@
-# ✨ Daemira
+# Daemira - Personal System Daemon
 
-**Daemira** — a personal system daemon for automated Google Drive sync and system maintenance on Arch Linux.
-
-A contemporary, type-safe TypeScript daemon that handles background tasks so you don't have to. Built with Bun for speed and simplicity.
-
-## Features
-
-- 🔄 **Google Drive Sync** - Bidirectional sync using rclone bisync with intelligent exclude patterns
-- 🔧 **System Updates** - Automated Arch Linux maintenance (pacman, AUR, firmware, cleanup)
-- 📝 **Smart Logging** - File-based logging with rotation and configurable log levels
-- 🗂️ **Notion Integration** - Ready-to-use Notion API client (CRUD, file sync)
-- 🛡️ **Type Safety** - Full TypeScript with Zod validation
+A comprehensive personal system daemon for Linux with Google Drive sync, system updates, health monitoring, and more.
 
 ## Quick Start
 
-### Prerequisites
+### Keep System Updated
+
+Run with `sudo` to enable system updates:
 
 ```bash
-# Install rclone
-sudo pacman -S rclone
-
-# Configure Google Drive remote
-rclone config
-# Name it 'gdrive' or customize with RCLONE_REMOTE_NAME in .env
+sudo go run main.go
 ```
 
-### Installation
+Or if installed:
+```bash
+sudo daemira
+```
+
+This will:
+- Run system update immediately
+- Schedule automatic updates every 6 hours
+- Keep running in the background
+
+### Keep Google Drive Synced
+
+Run as your regular user (rclone config is user-specific):
 
 ```bash
-# Install dependencies
-bun install
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings
-
-# Make entry point executable
-chmod +x src/main.ts
+go run main.go
 ```
 
-### Usage
-
-**Via bun scripts:**
+Or if installed:
 ```bash
-bun start                  # Start all services
-bun gdrive:status         # Check Google Drive sync status
-bun gdrive:sync           # Force sync now
-bun system:update         # Run system update
-bun system:status         # Check update schedule
+daemira
 ```
 
-**Direct execution:**
+This will:
+- Start Google Drive sync automatically
+- Sync all configured directories every 30 seconds
+- Keep running in the background
+
+### Run Both Services
+
+**Option 1: Use the start script (recommended)**
 ```bash
-./src/main.ts                     # Start daemon
-./src/main.ts gdrive:start        # Start Google Drive sync
-./src/main.ts gdrive:status       # Show sync status
-./src/main.ts gdrive:patterns     # List exclude patterns
-./src/main.ts gdrive:exclude "*.tmp"  # Add exclude pattern
-./src/main.ts system:update       # Run system update
-./src/main.ts system:status       # Show update history
+make start
+# or
+./scripts/start-daemira.sh
 ```
+
+This starts both:
+- System update service (as root)
+- Google Drive sync service (as user)
+
+**Option 2: Manual (two terminals)**
+```bash
+# Terminal 1: System updates
+sudo go run main.go
+
+# Terminal 2: Google Drive sync
+go run main.go
+```
+
+**Option 3: Background processes**
+```bash
+# System updates (as root)
+sudo go run main.go > /tmp/daemira-updates.log 2>&1 &
+
+# Google Drive sync (as user)
+go run main.go > /tmp/daemira-gdrive.log 2>&1 &
+```
+
+### Stop Services
+
+```bash
+make stop
+# or
+./scripts/stop-daemira.sh
+# or manually
+sudo pkill -f daemira
+```
+
+## Commands
+
+- `daemira status` - Show comprehensive system status
+- `daemira gdrive status` - Show Google Drive sync status
+- `daemira gdrive sync` - Force sync all directories immediately
+- `daemira system update` - Run system update manually
+- `daemira install` - Run system installer
 
 ## Configuration
 
-Create `.env` from template:
-
-```bash
-# Environment
-NODE_ENV=development
-LOG_LEVEL=info              # debug, info, warn, error
-
-# Google Drive
-RCLONE_REMOTE_NAME=gdrive
-
-# Notion (optional)
-NOTION_TOKEN=your_token
-NOTION_DATABASE_ID=your_db_id
-
-# AI Providers (optional)
-OPENAI_API_KEY=your_key
-GEMINI_API_KEY=your_key
-GROK_API_KEY=your_key
-```
-
-## Architecture
-
-```
-daemira/
-├── src/
-│   ├── main.ts             # Entry point
-│   ├── Daemira.ts          # Main orchestrator
-│   ├── config/
-│   │   └── index.ts        # Zod-validated configuration
-│   ├── utility/
-│   │   ├── Logger.ts       # File logger with rotation
-│   │   ├── Shell.ts        # Command executor
-│   │   ├── GoogleDrive.ts  # Google Drive sync
-│   │   └── Notion.ts       # Notion API client
-│   └── features/
-│       └── system-update/
-│           ├── SystemUpdate.ts
-│           └── index.ts
-└── log/                    # Log files (auto-created)
-```
+Configuration is loaded from `.env` file in the project root. See `src/config/config.go` for available options.
 
 ## Logs
 
-Logs are stored in `./log/`:
-- `current.log` - Current session
-- `archive/bot-1.log` to `bot-7.log` - Last 7 sessions
-
-Set log level via `LOG_LEVEL` environment variable: `debug`, `info`, `warn`, `error`
-
-## Google Drive Sync
-
-### Default Directories Synced
-
-- Documents
-- Downloads
-- Pictures
-- Desktop
-- Music
-- Source
-- .config
-
-### Intelligent Exclusions
-
-Automatically excludes 60+ patterns:
-- Build artifacts (`node_modules`, `dist`, `build`, `.next`, `target`, etc.)
-- Version control (`.git`, `.svn`, `.hg`)
-- IDE files (`.vscode`, `.idea`, `*.swp`)
-- OS files (`.DS_Store`, `Thumbs.db`)
-- Environment files (`.env`, `.env.local`)
-- Caches and temporary files
-- Large media caches (Steam, browser caches)
-
-### Sync Features
-
-- **Bidirectional** - Changes sync both ways using rclone bisync
-- **Conflict Resolution** - "Newer wins" strategy
-- **Queue-Based** - One sync at a time to avoid overwhelming the system
-- **Periodic Sync** - Every 30 seconds (configurable)
-- **Resilient** - Auto-recovery from interrupted syncs
-- **Lock Management** - Automatic cleanup of stale lock files
-
-## System Updates
-
-Comprehensive Arch Linux maintenance workflow:
-
-1. Refresh mirrorlist (optional)
-2. Update keyrings (archlinux-keyring, cachyos-keyring)
-3. Update package databases
-4. Upgrade packages (pacman)
-5. Update AUR packages (yay)
-6. Update firmware (fwupd)
-7. Remove orphaned packages
-8. Clean package cache (paccache)
-9. Clean AUR cache
-10. Optimize pacman database (optional)
-11. Update GRUB configuration
-12. Reload systemd daemon
-13. Check for .pacnew configuration files
-14. Check if reboot required (kernel updates)
-
-**Default Schedule:** Every 6 hours
-**Timeout:** 10 minutes per step
-**Logging:** All output captured to log files
+- Console output: Colored logs to stdout
+- File logs: `log/current.log` (rotates automatically)
 
 ## Development
 
 ```bash
-# Watch mode (auto-restart on changes)
-bun dev
+# Run in development mode
+make dev
 
-# Type checking
-tsc --noEmit
+# Run with specific command
+make dev ARGS="status"
 
-# Run specific command
-bun start gdrive:status
+# Build binary
+make build
+
+# Install to system
+make install
 ```
 
-## Utilities
+## Notes
 
-### Logger
-
-Singleton logger with file rotation and level filtering:
-
-```typescript
-import { Logger } from "./utility/Logger";
-const logger = Logger.getInstance();
-
-logger.debug("Debug info");
-logger.info("General info");
-logger.warn("Warning message");
-logger.error("Error occurred");
-```
-
-### Shell
-
-Execute system commands with proper error handling:
-
-```typescript
-import { Shell } from "./utility/Shell";
-
-const result = await Shell.execute("ls -la", {
-  timeout: 5000,
-  onStdout: (line) => console.log(line),
-  onStderr: (line) => console.error(line),
-});
-
-console.log(result.exitCode, result.stdout, result.stderr);
-```
-
-### Notion
-
-Notion API operations with retry logic:
-
-```typescript
-import { Notion } from "./utility/Notion";
-import { config } from "./config";
-
-const notion = new Notion(config.notionToken);
-
-// Query database
-const pages = await notion.queryDatabase(config.notionDatabaseId);
-
-// Create page
-const page = await notion.createPage(databaseId, properties, content);
-
-// Update page
-await notion.updatePage(pageId, properties);
-
-// Sync file to Notion
-await notion.syncFileToPage(pageId, "./README.md");
-```
-
-## License
-
-Private use only.
-
----
-
-Built with ❤️ using [Bun](https://bun.sh), TypeScript, and modern async patterns.
+- **System updates require root** - Run with `sudo` or configure passwordless sudo
+- **Google Drive sync requires user config** - Run as your regular user (not root)
+- **Both can run simultaneously** - Use the start script or run in separate terminals
